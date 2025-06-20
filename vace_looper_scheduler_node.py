@@ -1,7 +1,7 @@
-class VACELooperFrameScheduler:
+class VACELooperFrameMaskCreator:
     """
-    A ComfyUI node to calculate total frames and generate a schedule string
-    for VACE Looper, based on overlapping frames and in-between frames.
+    A ComfyUI node to calculate total frames and generate a frame mask string
+    for VACE (Create Fade Mask Advanced, kjnodes), based on overlapping frames and in-between frames.
     """
     def __init__(self):
         pass
@@ -31,7 +31,7 @@ class VACELooperFrameScheduler:
         }
 
     RETURN_TYPES = ("INT", "STRING", "INT", "INT", "INT")
-    RETURN_NAMES = ("TOTAL_FRAMES", "SCHEDULE_STRING", "OVERLAP_FRAMES_OUT", "IN_BETWEEN_FRAMES_OUT", "SOURCE_FRAME_COUNT")
+    RETURN_NAMES = ("total_frames", "fade_mask", "overlap_frames", "in_between_frames", "source_frames")
     FUNCTION = "calculate_schedule"
     CATEGORY = "VACELooper"
 
@@ -51,16 +51,12 @@ class VACELooperFrameScheduler:
 
         return (total_frames, schedule_string, actual_overlapping_frames, in_between_frames, source_frame_count)
 
-# A dictionary that ComfyUI uses to know what nodes are available.
-# This has to be called NODE_CLASS_MAPPINGS
 NODE_CLASS_MAPPINGS = {
-    "VACELooperFrameScheduler": VACELooperFrameScheduler
+    "VACELooperFrameMaskCreator": VACELooperFrameMaskCreator
 }
 
-# A dictionary that ComfyUI uses to know what nodes are available.
-# This has to be called NODE_DISPLAY_NAME_MAPPINGS
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VACELooperFrameScheduler": "VACE Looper Frame Scheduler"
+    "VACELooperFrameMaskCreator": "VACE Looper Frame Mask Creator"
 }
 
 if __name__ == "__main__":
@@ -73,4 +69,4 @@ if __name__ == "__main__":
             return f"MockTensor(shape={self.shape})"
 
     # Example Usage (for testing outside ComfyUI)
-    scheduler = VACELooperFrameScheduler()
+    scheduler = VACELooperFrameMaskCreator()

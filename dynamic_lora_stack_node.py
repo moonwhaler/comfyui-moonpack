@@ -16,7 +16,8 @@ class DynamicLoraStack:
     def stack_loras(self, **kwargs):
         loras = []
         # Sort kwargs by key to maintain the order of inputs
-        for key, value in sorted(kwargs.items()):
+        sorted_items = sorted(kwargs.items(), key=lambda item: int(item[0].split('_')[1]))
+        for key, value in sorted_items:
             if key.startswith("lora_") and value is not None:
                 loras.append(value)
 

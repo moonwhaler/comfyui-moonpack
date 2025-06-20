@@ -45,8 +45,10 @@ class DynamicStringConcat:
         # Sammle alle Input-Strings
         inputs = []
         
-        # Durchlaufe alle bereitgestellten Keyword-Argumente
-        for key, value in sorted(kwargs.items()):
+        # Sortiere die Inputs numerisch, um die korrekte Reihenfolge sicherzustellen
+        sorted_items = sorted(kwargs.items(), key=lambda item: int(item[0].split('_')[1]) if item[0].startswith("input_") else -1)
+
+        for key, value in sorted_items:
             if key.startswith("input_") and value is not None:
                 if isinstance(value, (list, tuple)):
                     # Falls es ein Array ist, nimm das erste Element

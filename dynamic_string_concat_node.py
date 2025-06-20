@@ -1,3 +1,4 @@
+from .utils import FlexibleOptionalInputType
 import re
 
 class DynamicStringConcat:
@@ -16,16 +17,11 @@ class DynamicStringConcat:
         Die Anzahl der Inputs wird dynamisch erweitert.
         """
         return {
-            "required": {},
-            "optional": {
-                "input_1": ("STRING", {"multiline": True, "default": ""}),
-                "input_2": ("STRING", {"multiline": True, "default": ""}),
-                "input_3": ("STRING", {"multiline": True, "default": ""}),
-                "input_4": ("STRING", {"multiline": True, "default": ""}),
-                "input_5": ("STRING", {"multiline": True, "default": ""}),
+            "required": {
                 "separator": ("STRING", {"default": " ", "multiline": False}),
                 "ignore_empty": ("BOOLEAN", {"default": True}),
-            }
+            },
+            "optional": FlexibleOptionalInputType("STRING")
         }
     
     RETURN_TYPES = ("STRING",)
@@ -50,7 +46,7 @@ class DynamicStringConcat:
         inputs = []
         
         # Durchlaufe alle bereitgestellten Keyword-Argumente
-        for key, value in kwargs.items():
+        for key, value in sorted(kwargs.items()):
             if key.startswith("input_") and value is not None:
                 if isinstance(value, (list, tuple)):
                     # Falls es ein Array ist, nimm das erste Element

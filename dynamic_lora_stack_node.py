@@ -1,24 +1,24 @@
+from .utils import FlexibleOptionalInputType
+
+
 class DynamicLoraStack:
     @classmethod
     def INPUT_TYPES(s):
-        # Define up to 64 optional LoRA inputs
-        optional_inputs = {f"lora_{i}": ("LORA",) for i in range(1, 65)}
         return {
             "required": {},
-            "optional": optional_inputs
+            "optional": FlexibleOptionalInputType("WANVIDLORA")
         }
 
-    RETURN_TYPES = ("LORA",)
+    RETURN_TYPES = ("WANVIDLORA",)
     FUNCTION = "stack_loras"
     CATEGORY = "moonpack/lora"
 
     def stack_loras(self, **kwargs):
         loras = []
         # Sort kwargs by key to maintain the order of inputs
-        for i in range(1, 65):
-            lora_key = f"lora_{i}"
-            if lora_key in kwargs and kwargs[lora_key] is not None:
-                loras.append(kwargs[lora_key])
+        for key, value in sorted(kwargs.items()):
+            if key.startswith("lora_") and value is not None:
+                loras.append(value)
 
         if not loras:
             return (None,)

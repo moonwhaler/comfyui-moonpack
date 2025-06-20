@@ -27,20 +27,23 @@ class SimpleStringReplace:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "text": ("STRING", {"multiline": True}),
+                "text": ("STRING", {"forceInput": True}),
                 "find_replace_pairs": ("STRING", {
                     "multiline": True,
                     "default": "find => replace\nold => new",
                     "placeholder": HELP_TEXT
                 }),
             },
+            "optional": {
+                "whole_word_match": ("BOOLEAN", {"default": False}),
+            }
         }
     
     RETURN_TYPES = ("STRING",)
     FUNCTION = "replace"
     CATEGORY = "string"
 
-    def replace(self, text: str, find_replace_pairs: str) -> Tuple[str]:
+    def replace(self, text: str, find_replace_pairs: str, whole_word_match: bool = False) -> Tuple[str]:
         if not text:
             return (text,)
 
@@ -55,8 +58,12 @@ class SimpleStringReplace:
             find = find.strip()
             replace = replace.strip()
             
-            if find:  # Only replace if find pattern is not empty
-                result = result.replace(find, replace)
+            if find:
+                if whole_word_match:
+                    pattern = r'\b' + re.escape(find) + r'\b'
+                    result = re.sub(pattern, replace, result)
+                else:
+                    result = result.replace(find, replace)
         
         return (result,)
 
@@ -65,7 +72,7 @@ class RegexStringReplace:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "text": ("STRING", {"multiline": True}),
+                "text": ("STRING", {"forceInput": True}),
                 "pattern": ("STRING", {
                     "multiline": True,
                     "placeholder": REGEX_HELP

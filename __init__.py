@@ -21,7 +21,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **vls_display_mappings
 }
 
-__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
+WEB_DIRECTORY = "./web"
+__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
 
 print("### MoonPack Custom Nodes registered (Modular):")
 for name in NODE_CLASS_MAPPINGS.keys():

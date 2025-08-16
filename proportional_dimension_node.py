@@ -30,8 +30,8 @@ class ProportionalDimension:
             }
         }
 
-    RETURN_TYPES = ("INT", "INT",)
-    RETURN_NAMES = ("width", "height",)
+    RETURN_TYPES = ("INT", "INT", "INT", "INT",)
+    RETURN_NAMES = ("width", "height", "shortest_side", "longest_side",)
     FUNCTION = "calculate"
     CATEGORY = "dimensions"
 
@@ -54,8 +54,11 @@ class ProportionalDimension:
             else:
                 new_height = target_size
                 new_width = int(new_height * aspect_ratio)
+
+        shortest_side = min(new_width, new_height)
+        longest_side = max(new_width, new_height)
             
-        return (new_width, new_height,)
+        return (new_width, new_height, shortest_side, longest_side,)
 
 NODE_CLASS_MAPPINGS = {
     "ProportionalDimension": ProportionalDimension

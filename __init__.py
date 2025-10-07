@@ -3,6 +3,7 @@ from .string_replace_nodes import NODE_CLASS_MAPPINGS as sr_class_mappings, NODE
 from .vace_looper_fade_mask_node import NODE_CLASS_MAPPINGS as vls_class_mappings, NODE_DISPLAY_NAME_MAPPINGS as vls_display_mappings
 from .dynamic_string_concat_node import NODE_CLASS_MAPPINGS as dsc_class_mappings, NODE_DISPLAY_NAME_MAPPINGS as dsc_display_mappings
 from .dynamic_lora_stack_node import NODE_CLASS_MAPPINGS as dls_class_mappings, NODE_DISPLAY_NAME_MAPPINGS as dls_display_mappings
+from .fast_node_bypasser import NODE_CLASS_MAPPINGS as fnb_class_mappings, NODE_DISPLAY_NAME_MAPPINGS as fnb_display_mappings
 
 # Combine the mappings
 NODE_CLASS_MAPPINGS = {
@@ -10,7 +11,8 @@ NODE_CLASS_MAPPINGS = {
     **dsc_class_mappings,
     **pd_class_mappings,
     **sr_class_mappings,
-    **vls_class_mappings
+    **vls_class_mappings,
+    **fnb_class_mappings
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -18,7 +20,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **dsc_display_mappings,
     **pd_display_mappings,
     **sr_display_mappings,
-    **vls_display_mappings
+    **vls_display_mappings,
+    **fnb_display_mappings
 }
 
 WEB_DIRECTORY = "./web"

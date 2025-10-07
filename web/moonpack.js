@@ -120,6 +120,10 @@ function addDynamicInputSupport(nodeType, nodeData) {
 function addFastNodeBypasserSupport(nodeType, nodeData) {
     const MODE_ALWAYS = 0;
     const MODE_BYPASS = 4;
+    const PROPERTY_MATCH_TITLE = "matchTitle";
+
+    // Define properties following the exact same pattern as fast groups bypasser
+    nodeType["@matchTitle"] = { type: "string" };
 
     nodeType.prototype.schedulePromise = null;
 
@@ -157,55 +161,90 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
         return connectedNodes;
     };
 
+    nodeType.prototype.getNodesToControl = function() {
+        // If matchTitle is set, use pattern matching instead of connections
+        const matchTitle = this.properties?.[PROPERTY_MATCH_TITLE]?.trim();
+
+        if (matchTitle) {
+            const matchedNodes = [];
+            try {
+                const regex = new RegExp(matchTitle, "i");
+                const allNodes = app.graph._nodes || [];
+
+                for (const node of allNodes) {
+                    // Don't match ourselves
+                    if (node === this) continue;
+
+                    if (regex.exec(node.title)) {
+                        matchedNodes.push({
+                            node: node,
+                            inputIndex: -1 // Not connected via input
+                        });
+                    }
+                }
+            } catch (e) {
+                console.error("Invalid regex pattern in matchTitle:", e);
+            }
+            return matchedNodes;
+        }
+
+        // Otherwise, use the traditional connection-based approach
+        return this.getConnectedNodes();
+    };
+
     nodeType.prototype.stabilize = function() {
         if (!this.graph) return;
 
         let changed = false;
-        const connectedNodes = this.getConnectedNodes();
+        const nodesToControl = this.getNodesToControl();
 
         // Store current width to preserve it during changes
         const tempWidth = this.size[0];
 
-        // Ensure we have enough inputs (always one empty at the end)
-        const lastInput = this.inputs[this.inputs.length - 1];
-        if (!lastInput || lastInput.link != null) {
-            this.addInput(`node_${this.inputs.length}`, "*");
-            changed = true;
-        }
+        // Only manage inputs if we're using connection-based mode (not matchTitle)
+        const matchTitle = this.properties?.[PROPERTY_MATCH_TITLE]?.trim();
+        if (!matchTitle) {
+            // Ensure we have enough inputs (always one empty at the end)
+            const lastInput = this.inputs[this.inputs.length - 1];
+            if (!lastInput || lastInput.link != null) {
+                this.addInput(`node_${this.inputs.length}`, "*");
+                changed = true;
+            }
 
-        // Remove empty inputs from the middle
-        for (let i = this.inputs.length - 2; i >= 0; i--) {
-            if (this.inputs[i].link == null) {
-                this.removeInput(i);
+            // Remove empty inputs from the middle
+            for (let i = this.inputs.length - 2; i >= 0; i--) {
+                if (this.inputs[i].link == null) {
+                    this.removeInput(i);
+                    changed = true;
+                }
+            }
+
+            // Ensure at least one input exists
+            if (this.inputs.length === 0) {
+                this.addInput("node_0", "*");
                 changed = true;
             }
         }
 
-        // Ensure at least one input exists
-        if (this.inputs.length === 0) {
-            this.addInput("node_0", "*");
-            changed = true;
-        }
-
-        // Update widgets to match connected nodes
+        // Update widgets to match nodes to control
         const widgetCount = this.widgets ? this.widgets.length : 0;
-        const nodeCount = connectedNodes.length;
+        const nodeCount = nodesToControl.length;
 
-        // Add widgets for new connections
+        // Add widgets for new nodes
         for (let i = widgetCount; i < nodeCount; i++) {
-            const connectedNode = connectedNodes[i].node;
+            const controlledNode = nodesToControl[i].node;
             const widget = this.addWidget(
                 "toggle",
-                `Enable ${connectedNode.title}`,
-                connectedNode.mode === MODE_ALWAYS,
+                `Enable ${controlledNode.title}`,
+                controlledNode.mode === MODE_ALWAYS,
                 (value) => {
                     // Toggle the node's mode
-                    connectedNode.mode = value ? MODE_ALWAYS : MODE_BYPASS;
+                    controlledNode.mode = value ? MODE_ALWAYS : MODE_BYPASS;
                     app.graph.setDirtyCanvas(true, false);
                 },
                 { on: "active", off: "bypass" }
             );
-            widget._connectedNodeId = connectedNode.id;
+            widget._controlledNodeId = controlledNode.id;
             changed = true;
         }
 
@@ -219,11 +258,11 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
         if (this.widgets) {
             for (let i = 0; i < this.widgets.length; i++) {
                 const widget = this.widgets[i];
-                const connectedNode = connectedNodes[i]?.node;
+                const controlledNode = nodesToControl[i]?.node;
 
-                if (connectedNode) {
-                    const newName = `Enable ${connectedNode.title}`;
-                    const newValue = connectedNode.mode === MODE_ALWAYS;
+                if (controlledNode) {
+                    const newName = `Enable ${controlledNode.title}`;
+                    const newValue = controlledNode.mode === MODE_ALWAYS;
 
                     if (widget.name !== newName) {
                         widget.name = newName;
@@ -235,11 +274,11 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
                         changed = true;
                     }
 
-                    widget._connectedNodeId = connectedNode.id;
+                    widget._controlledNodeId = controlledNode.id;
 
                     // Update the callback to reference the current node
                     widget.callback = (value) => {
-                        connectedNode.mode = value ? MODE_ALWAYS : MODE_BYPASS;
+                        controlledNode.mode = value ? MODE_ALWAYS : MODE_BYPASS;
                         app.graph.setDirtyCanvas(true, false);
                     };
                 }
@@ -258,14 +297,14 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
 
     // Add context menu actions
     nodeType.prototype.getExtraMenuOptions = function(_, options) {
-        const connectedNodes = this.getConnectedNodes();
+        const nodesToControl = this.getNodesToControl();
 
-        if (connectedNodes.length > 0) {
+        if (nodesToControl.length > 0) {
             options.unshift(
                 {
                     content: "Bypass All",
                     callback: () => {
-                        for (const {node} of connectedNodes) {
+                        for (const {node} of nodesToControl) {
                             node.mode = MODE_BYPASS;
                         }
                         if (this.widgets) {
@@ -279,7 +318,7 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
                 {
                     content: "Enable All",
                     callback: () => {
-                        for (const {node} of connectedNodes) {
+                        for (const {node} of nodesToControl) {
                             node.mode = MODE_ALWAYS;
                         }
                         if (this.widgets) {
@@ -293,15 +332,15 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
                 {
                     content: "Toggle All",
                     callback: () => {
-                        for (const {node} of connectedNodes) {
+                        for (const {node} of nodesToControl) {
                             node.mode = node.mode === MODE_ALWAYS ? MODE_BYPASS : MODE_ALWAYS;
                         }
                         if (this.widgets) {
                             for (let i = 0; i < this.widgets.length; i++) {
                                 const widget = this.widgets[i];
-                                const connectedNode = connectedNodes[i]?.node;
-                                if (connectedNode) {
-                                    widget.value = connectedNode.mode === MODE_ALWAYS;
+                                const controlledNode = nodesToControl[i]?.node;
+                                if (controlledNode) {
+                                    widget.value = controlledNode.mode === MODE_ALWAYS;
                                 }
                             }
                         }
@@ -317,6 +356,14 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function() {
         onNodeCreated?.apply(this, arguments);
+
+        // Initialize properties following the exact same pattern as fast groups bypasser
+        if (!this.properties) {
+            this.properties = {};
+        }
+        if (this.properties[PROPERTY_MATCH_TITLE] === undefined) {
+            this.properties[PROPERTY_MATCH_TITLE] = "";
+        }
 
         // Add initial input if none exist
         if (!this.inputs || this.inputs.length === 0) {
@@ -341,6 +388,19 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
             if (index !== -1) {
                 this.widgets.splice(index, 1);
             }
+        }
+    };
+
+    // Handle property changes (e.g., when matchTitle is updated)
+    const onPropertyChanged = nodeType.prototype.onPropertyChanged;
+    nodeType.prototype.onPropertyChanged = function(property, value) {
+        onPropertyChanged?.apply(this, arguments);
+        if (property === PROPERTY_MATCH_TITLE) {
+            // Clear all widgets and refresh when matchTitle changes
+            while (this.widgets && this.widgets.length > 0) {
+                this.removeWidget(0);
+            }
+            this.scheduleStabilize(10); // Quick refresh
         }
     };
 }

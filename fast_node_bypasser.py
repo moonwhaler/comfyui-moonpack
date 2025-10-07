@@ -5,6 +5,7 @@ class FastNodeBypasser:
     """
     A node that allows quick bypassing of connected nodes.
     Connect any nodes to this bypasser, and it will create toggle controls for each.
+    Alternatively, use the 'matchTitle' property to automatically match nodes by title pattern.
     """
 
     @classmethod
@@ -13,6 +14,10 @@ class FastNodeBypasser:
             "required": {},
             "optional": {},
         }
+
+    @classmethod
+    def VALIDATE_INPUTS(s, **kwargs):
+        return True
 
     RETURN_TYPES = (any_type,)
     RETURN_NAMES = ("*",)

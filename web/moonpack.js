@@ -121,9 +121,21 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
     const MODE_ALWAYS = 0;
     const MODE_BYPASS = 4;
     const PROPERTY_MATCH_TITLE = "matchTitle";
+    const PROPERTY_SORT = "sort";
+    const PROPERTY_SORT_CUSTOM_ALPHA = "customSortAlphabet";
+    const PROPERTY_RESTRICTION = "toggleRestriction";
 
     // Define properties following the exact same pattern as fast groups bypasser
     nodeType["@matchTitle"] = { type: "string" };
+    nodeType["@sort"] = {
+        type: "combo",
+        values: ["position", "alphanumeric", "custom alphabet"]
+    };
+    nodeType["@customSortAlphabet"] = { type: "string" };
+    nodeType["@toggleRestriction"] = {
+        type: "combo",
+        values: ["default", "max one", "always one"]
+    };
 
     nodeType.prototype.schedulePromise = null;
 
@@ -164,6 +176,7 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
     nodeType.prototype.getNodesToControl = function() {
         // If matchTitle is set, use pattern matching instead of connections
         const matchTitle = this.properties?.[PROPERTY_MATCH_TITLE]?.trim();
+        let nodesToControl = [];
 
         if (matchTitle) {
             const matchedNodes = [];
@@ -185,11 +198,68 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
             } catch (e) {
                 console.error("Invalid regex pattern in matchTitle:", e);
             }
-            return matchedNodes;
+            nodesToControl = matchedNodes;
+        } else {
+            // Otherwise, use the traditional connection-based approach
+            nodesToControl = this.getConnectedNodes();
         }
 
-        // Otherwise, use the traditional connection-based approach
-        return this.getConnectedNodes();
+        // Apply sorting
+        const sort = this.properties?.[PROPERTY_SORT] || "position";
+
+        if (sort === "alphanumeric") {
+            nodesToControl.sort((a, b) => a.node.title.localeCompare(b.node.title));
+        } else if (sort === "custom alphabet") {
+            let customAlphabet = null;
+            const customAlphaStr = this.properties?.[PROPERTY_SORT_CUSTOM_ALPHA]?.replace(/\n/g, "");
+            if (customAlphaStr && customAlphaStr.trim()) {
+                customAlphabet = customAlphaStr.includes(",")
+                    ? customAlphaStr.toLocaleLowerCase().split(",")
+                    : customAlphaStr.toLocaleLowerCase().trim().split("");
+            }
+
+            if (customAlphabet?.length) {
+                nodesToControl.sort((a, b) => {
+                    let aIndex = -1;
+                    let bIndex = -1;
+                    // Loop and find indexes
+                    for (const [index, alpha] of customAlphabet.entries()) {
+                        aIndex = aIndex < 0 ? (a.node.title.toLocaleLowerCase().startsWith(alpha) ? index : -1) : aIndex;
+                        bIndex = bIndex < 0 ? (b.node.title.toLocaleLowerCase().startsWith(alpha) ? index : -1) : bIndex;
+                        if (aIndex > -1 && bIndex > -1) {
+                            break;
+                        }
+                    }
+                    // Now compare
+                    if (aIndex > -1 && bIndex > -1) {
+                        const ret = aIndex - bIndex;
+                        if (ret === 0) {
+                            return a.node.title.localeCompare(b.node.title);
+                        }
+                        return ret;
+                    } else if (aIndex > -1) {
+                        return -1;
+                    } else if (bIndex > -1) {
+                        return 1;
+                    }
+                    return a.node.title.localeCompare(b.node.title);
+                });
+            } else {
+                // Fallback to alphanumeric if custom alphabet is invalid
+                nodesToControl.sort((a, b) => a.node.title.localeCompare(b.node.title));
+            }
+        } else if (sort === "position") {
+            nodesToControl.sort((a, b) => {
+                // Sort by Y position first, then X position
+                const yDiff = a.node.pos[1] - b.node.pos[1];
+                if (Math.abs(yDiff) > 10) { // Use threshold for "same row"
+                    return yDiff;
+                }
+                return a.node.pos[0] - b.node.pos[0];
+            });
+        }
+
+        return nodesToControl;
     };
 
     nodeType.prototype.stabilize = function() {
@@ -207,7 +277,7 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
             // Ensure we have enough inputs (always one empty at the end)
             const lastInput = this.inputs[this.inputs.length - 1];
             if (!lastInput || lastInput.link != null) {
-                this.addInput(`node_${this.inputs.length}`, "*");
+                this.addInput(`bypass_node_${this.inputs.length}`, "*");
                 changed = true;
             }
 
@@ -221,7 +291,7 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
 
             // Ensure at least one input exists
             if (this.inputs.length === 0) {
-                this.addInput("node_0", "*");
+                this.addInput("bypass_node_0", "*");
                 changed = true;
             }
         }
@@ -238,8 +308,32 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
                 `Enable ${controlledNode.title}`,
                 controlledNode.mode === MODE_ALWAYS,
                 (value) => {
+                    // Handle toggle restriction
+                    const restriction = this.properties?.[PROPERTY_RESTRICTION] || "default";
+
+                    if (value && restriction?.includes(" one")) {
+                        // If enabling and we have a "max one" or "always one" restriction, disable all others
+                        for (const w of this.widgets) {
+                            if (w !== widget && w._controlledNodeId) {
+                                const otherNode = app.graph.getNodeById(w._controlledNodeId);
+                                if (otherNode) {
+                                    otherNode.mode = MODE_BYPASS;
+                                    w.value = false;
+                                }
+                            }
+                        }
+                    } else if (!value && restriction === "always one") {
+                        // If disabling and we have "always one" restriction, check if we're the last one
+                        const anyEnabled = this.widgets.some(w => w !== widget && w.value);
+                        if (!anyEnabled) {
+                            // Don't allow disabling the last one
+                            value = true;
+                        }
+                    }
+
                     // Toggle the node's mode
                     controlledNode.mode = value ? MODE_ALWAYS : MODE_BYPASS;
+                    widget.value = value; // Ensure widget reflects the final state
                     app.graph.setDirtyCanvas(true, false);
                 },
                 { on: "active", off: "bypass" }
@@ -276,9 +370,34 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
 
                     widget._controlledNodeId = controlledNode.id;
 
-                    // Update the callback to reference the current node
+                    // Update the callback to reference the current node and handle restrictions
                     widget.callback = (value) => {
+                        // Handle toggle restriction
+                        const restriction = this.properties?.[PROPERTY_RESTRICTION] || "default";
+
+                        if (value && restriction?.includes(" one")) {
+                            // If enabling and we have a "max one" or "always one" restriction, disable all others
+                            for (const w of this.widgets) {
+                                if (w !== widget && w._controlledNodeId) {
+                                    const otherNode = app.graph.getNodeById(w._controlledNodeId);
+                                    if (otherNode) {
+                                        otherNode.mode = MODE_BYPASS;
+                                        w.value = false;
+                                    }
+                                }
+                            }
+                        } else if (!value && restriction === "always one") {
+                            // If disabling and we have "always one" restriction, check if we're the last one
+                            const anyEnabled = this.widgets.some(w => w !== widget && w.value);
+                            if (!anyEnabled) {
+                                // Don't allow disabling the last one
+                                value = true;
+                            }
+                        }
+
+                        // Toggle the node's mode
                         controlledNode.mode = value ? MODE_ALWAYS : MODE_BYPASS;
+                        widget.value = value; // Ensure widget reflects the final state
                         app.graph.setDirtyCanvas(true, false);
                     };
                 }
@@ -304,12 +423,17 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
                 {
                     content: "Bypass All",
                     callback: () => {
-                        for (const {node} of nodesToControl) {
-                            node.mode = MODE_BYPASS;
+                        const restriction = this.properties?.[PROPERTY_RESTRICTION] || "default";
+                        const alwaysOne = restriction === "always one";
+
+                        for (let i = 0; i < nodesToControl.length; i++) {
+                            const {node} = nodesToControl[i];
+                            // If "always one" restriction, enable the first, bypass the rest
+                            node.mode = (alwaysOne && i === 0) ? MODE_ALWAYS : MODE_BYPASS;
                         }
                         if (this.widgets) {
-                            for (const widget of this.widgets) {
-                                widget.value = false;
+                            for (let i = 0; i < this.widgets.length; i++) {
+                                this.widgets[i].value = (alwaysOne && i === 0);
                             }
                         }
                         app.graph.setDirtyCanvas(true, false);
@@ -318,12 +442,17 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
                 {
                     content: "Enable All",
                     callback: () => {
-                        for (const {node} of nodesToControl) {
-                            node.mode = MODE_ALWAYS;
+                        const restriction = this.properties?.[PROPERTY_RESTRICTION] || "default";
+                        const onlyOne = restriction?.includes(" one");
+
+                        for (let i = 0; i < nodesToControl.length; i++) {
+                            const {node} = nodesToControl[i];
+                            // If restriction includes "one", only enable the first
+                            node.mode = (onlyOne && i > 0) ? MODE_BYPASS : MODE_ALWAYS;
                         }
                         if (this.widgets) {
-                            for (const widget of this.widgets) {
-                                widget.value = true;
+                            for (let i = 0; i < this.widgets.length; i++) {
+                                this.widgets[i].value = !(onlyOne && i > 0);
                             }
                         }
                         app.graph.setDirtyCanvas(true, false);
@@ -332,9 +461,23 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
                 {
                     content: "Toggle All",
                     callback: () => {
-                        for (const {node} of nodesToControl) {
-                            node.mode = node.mode === MODE_ALWAYS ? MODE_BYPASS : MODE_ALWAYS;
+                        const restriction = this.properties?.[PROPERTY_RESTRICTION] || "default";
+                        const onlyOne = restriction?.includes(" one");
+                        let foundOne = false;
+
+                        for (let i = 0; i < nodesToControl.length; i++) {
+                            const {node} = nodesToControl[i];
+                            // If you have only one, then we'll stop at the first
+                            let newValue = onlyOne && foundOne ? false : node.mode !== MODE_ALWAYS;
+                            foundOne = foundOne || newValue;
+                            node.mode = newValue ? MODE_ALWAYS : MODE_BYPASS;
                         }
+
+                        // And if you have always one, then we'll flip the last
+                        if (!foundOne && restriction === "always one" && nodesToControl.length > 0) {
+                            nodesToControl[nodesToControl.length - 1].node.mode = MODE_ALWAYS;
+                        }
+
                         if (this.widgets) {
                             for (let i = 0; i < this.widgets.length; i++) {
                                 const widget = this.widgets[i];
@@ -364,10 +507,19 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
         if (this.properties[PROPERTY_MATCH_TITLE] === undefined) {
             this.properties[PROPERTY_MATCH_TITLE] = "";
         }
+        if (this.properties[PROPERTY_SORT] === undefined) {
+            this.properties[PROPERTY_SORT] = "position";
+        }
+        if (this.properties[PROPERTY_SORT_CUSTOM_ALPHA] === undefined) {
+            this.properties[PROPERTY_SORT_CUSTOM_ALPHA] = "";
+        }
+        if (this.properties[PROPERTY_RESTRICTION] === undefined) {
+            this.properties[PROPERTY_RESTRICTION] = "default";
+        }
 
         // Add initial input if none exist
         if (!this.inputs || this.inputs.length === 0) {
-            this.addInput("node_0", "*");
+            this.addInput("bypass_node_0", "*");
         }
 
         this.scheduleStabilize();
@@ -391,12 +543,12 @@ function addFastNodeBypasserSupport(nodeType, nodeData) {
         }
     };
 
-    // Handle property changes (e.g., when matchTitle is updated)
+    // Handle property changes (e.g., when matchTitle or sort is updated)
     const onPropertyChanged = nodeType.prototype.onPropertyChanged;
     nodeType.prototype.onPropertyChanged = function(property, value) {
         onPropertyChanged?.apply(this, arguments);
-        if (property === PROPERTY_MATCH_TITLE) {
-            // Clear all widgets and refresh when matchTitle changes
+        if (property === PROPERTY_MATCH_TITLE || property === PROPERTY_SORT || property === PROPERTY_SORT_CUSTOM_ALPHA) {
+            // Clear all widgets and refresh when matchTitle or sort changes
             while (this.widgets && this.widgets.length > 0) {
                 this.removeWidget(0);
             }

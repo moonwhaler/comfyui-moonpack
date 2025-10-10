@@ -23,6 +23,8 @@ A virtual node that allows quick bypassing of multiple nodes without manually to
 **Features:**
 - **Connection-based mode:** Connect any nodes to this bypasser, and it will create toggle controls for each connected node
 - **Pattern matching mode:** Use the `matchTitle` property to automatically match nodes by their title using regex patterns
+- **Sorting options:** Sort controlled nodes by position, alphanumeric order, or custom alphabet
+- **Toggle restrictions:** Optionally limit the number of nodes that can be enabled simultaneously
 - Context menu actions: "Bypass All", "Enable All", "Toggle All"
 
 **Usage:**
@@ -42,12 +44,35 @@ A virtual node that allows quick bypassing of multiple nodes without manually to
 
 **Properties:**
 - `matchTitle` (string): Regex pattern to match node titles. Leave empty to use connection-based mode.
+- `sort` (combo): Sort order for toggles
+  - `position` *(default)*: Sort by node position in the graph (top-to-bottom, left-to-right)
+  - `alphanumeric`: Sort alphabetically by node title
+  - `custom alphabet`: Sort using custom alphabet defined in `customSortAlphabet`
+- `customSortAlphabet` (string): Custom alphabet for sorting (only used when sort is "custom alphabet")
+  - Can be single characters (e.g., `zyxw...`) or comma-delimited strings (e.g., `sdxl,pro,sd,n,p`)
+  - Nodes starting with earlier entries appear first
+  - Nodes not matching any entry are placed last, sorted alphanumerically
+  - When two nodes match the same entry, normal alphanumeric order breaks the tie
+- `toggleRestriction` (combo): Limit the number of enabled nodes
+  - `default` *(default)*: No restrictions, any number of nodes can be enabled
+  - `max one`: At most one node can be enabled at a time
+  - `always one`: Exactly one node must be enabled at all times
 
 **Example patterns:**
 - `sampler` - Matches any node with "sampler" in the title
 - `^KSampler` - Matches nodes starting with "KSampler"
 - `Load.*Model` - Matches nodes like "Load Checkpoint", "Load LoRA Model", etc.
 - `(upscale|downscale)` - Matches nodes containing either "upscale" or "downscale"
+
+**Example custom alphabet:**
+- `sdxl,sd,n,p` - Nodes starting with "sdxl" first, then "sd", then "n", then "p"
+- `a,b,c` - Sort by first letter: a's first, b's second, c's third
+
+**Toggle Restriction Behavior:**
+- When set to "max one" or "always one", enabling a node automatically disables all others
+- When set to "always one", you cannot disable the last enabled node
+- Restrictions apply to both individual toggle clicks and context menu actions
+- Note: Restrictions are only enforced when using the bypasser's toggles; manual node changes outside the bypasser may result in multiple enabled nodes
 
 ---
 
@@ -294,4 +319,4 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 
 ## License
 
-[Your License Here]
+MIT License.

@@ -19,8 +19,7 @@ class FastNodeBypasser:
     def VALIDATE_INPUTS(s, **kwargs):
         return True
 
-    RETURN_TYPES = (any_type,)
-    RETURN_NAMES = ("*",)
+    RETURN_TYPES = ()
     FUNCTION = "bypass_nodes"
     CATEGORY = "moonpack/utils"
     OUTPUT_NODE = False
@@ -33,8 +32,8 @@ class FastNodeBypasser:
         This node is a passthrough/virtual node.
         The actual bypassing logic is handled in the JavaScript frontend.
         """
-        # Return None as this is a control node, not a data processing node
-        return (None,)
+        # Return empty tuple as this is a control node with no outputs
+        return ()
 
 
 NODE_CLASS_MAPPINGS = {

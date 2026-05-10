@@ -36,6 +36,61 @@ def test_proportional_dimension_scale_output():
     assert 0.5 < scale < 0.6
 
 
+def test_proportional_dimension_orientation_auto_matches_default():
+    from proportional_dimension_node import ProportionalDimension
+    n = ProportionalDimension()
+    baseline = n.calculate(1920, 1080, 512, "shortest", 1)
+    forced = n.calculate(1920, 1080, 512, "shortest", 1, "nearest", "auto")
+    assert baseline == forced
+
+
+def test_proportional_dimension_orientation_force_portrait_from_landscape():
+    from proportional_dimension_node import ProportionalDimension
+    n = ProportionalDimension()
+    w, h, *_ = n.calculate(1920, 1080, 512, "shortest", 1, "nearest", "portrait")
+    assert w == 512
+    assert h > w
+
+
+def test_proportional_dimension_orientation_force_landscape_from_portrait():
+    from proportional_dimension_node import ProportionalDimension
+    n = ProportionalDimension()
+    w, h, *_ = n.calculate(1080, 1920, 512, "shortest", 1, "nearest", "landscape")
+    assert h == 512
+    assert w > h
+
+
+def test_proportional_dimension_orientation_already_matches_is_noop():
+    from proportional_dimension_node import ProportionalDimension
+    n = ProportionalDimension()
+    auto = n.calculate(1080, 1920, 512, "shortest", 1, "nearest", "auto")
+    portrait = n.calculate(1080, 1920, 512, "shortest", 1, "nearest", "portrait")
+    assert auto == portrait
+
+
+def test_proportional_dimension_orientation_square_equal_dims():
+    from proportional_dimension_node import ProportionalDimension
+    n = ProportionalDimension()
+    w, h, s, l, _ = n.calculate(1920, 1080, 512, "shortest", 1, "nearest", "square")
+    assert w == 512 and h == 512
+    assert s == 512 and l == 512
+
+
+def test_proportional_dimension_orientation_square_snaps_to_divisor():
+    from proportional_dimension_node import ProportionalDimension
+    n = ProportionalDimension()
+    w, h, *_ = n.calculate(1920, 1080, 500, "shortest", 64, "floor", "square")
+    assert w == h == 448
+
+
+def test_proportional_dimension_orientation_square_ignores_target_side():
+    from proportional_dimension_node import ProportionalDimension
+    n = ProportionalDimension()
+    a = n.calculate(1920, 1080, 512, "shortest", 1, "nearest", "square")
+    b = n.calculate(1920, 1080, 512, "longest", 1, "nearest", "square")
+    assert a == b
+
+
 # --- SmartResolution --------------------------------------------------------
 
 def test_smart_resolution_sdxl_aspect_preserved():

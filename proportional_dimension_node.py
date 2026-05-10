@@ -26,6 +26,14 @@ class ProportionalDimension:
                     "default": "shortest",
                     "tooltip": "Which side target_size applies to. 'shortest' upscales the smaller side; 'longest' caps the larger side.",
                 }),
+                "orientation": (["auto", "landscape", "portrait", "square"], {
+                    "default": "auto",
+                    "tooltip": (
+                        "Force output orientation. 'auto' keeps source orientation. "
+                        "'landscape'/'portrait' swap width/height when source doesn't match. "
+                        "'square' produces target_size x target_size (ignores target_side)."
+                    ),
+                }),
                 "divisible_by": ("INT", {"default": 1, "min": 1, "max": 1024,
                     "tooltip": "Snap output dimensions to a multiple of this value (1 = no snapping)."}),
                 "rounding": (["nearest", "floor", "ceil"], {
@@ -46,27 +54,38 @@ class ProportionalDimension:
     CATEGORY = CATEGORY
 
     def calculate(self, width, height, target_size, target_side, divisible_by,
-                  rounding="nearest", from_image=None):
+                  rounding="nearest", orientation="auto", from_image=None):
         if from_image is not None:
             # IMAGE shape is [B, H, W, C].
             _, h, w, _ = from_image.shape
             width, height = int(w), int(h)
 
-        aspect = width / height
-        if target_side == "shortest":
-            if width < height:
-                new_w = float(target_size)
-                new_h = new_w / aspect
-            else:
-                new_h = float(target_size)
-                new_w = new_h * aspect
-        else:  # longest
-            if width > height:
-                new_w = float(target_size)
-                new_h = new_w / aspect
-            else:
-                new_h = float(target_size)
-                new_w = new_h * aspect
+        src_w, src_h = width, height
+
+        if orientation == "square":
+            new_w = float(target_size)
+            new_h = float(target_size)
+        else:
+            if orientation == "landscape" and height > width:
+                width, height = height, width
+            elif orientation == "portrait" and width > height:
+                width, height = height, width
+
+            aspect = width / height
+            if target_side == "shortest":
+                if width < height:
+                    new_w = float(target_size)
+                    new_h = new_w / aspect
+                else:
+                    new_h = float(target_size)
+                    new_w = new_h * aspect
+            else:  # longest
+                if width > height:
+                    new_w = float(target_size)
+                    new_h = new_w / aspect
+                else:
+                    new_h = float(target_size)
+                    new_w = new_h * aspect
 
         if divisible_by > 1:
             snap = _ROUNDERS[rounding]
@@ -76,7 +95,7 @@ class ProportionalDimension:
             new_w = max(1, int(round(new_w)))
             new_h = max(1, int(round(new_h)))
 
-        scale = ((new_w / width) + (new_h / height)) / 2.0
+        scale = ((new_w / src_w) + (new_h / src_h)) / 2.0
         return (new_w, new_h, min(new_w, new_h), max(new_w, new_h), float(scale))
 
 

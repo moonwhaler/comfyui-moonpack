@@ -1,0 +1,3 @@
+# MoonPack has no third-party Python runtime dependencies beyond what
+# ComfyUI itself ships (torch, numpy). This file exists so ComfyUI Manager
+# and the Comfy Registry can detect the package layout.

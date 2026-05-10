@@ -1,79 +1,105 @@
-from .utils import FlexibleOptionalInputType
+import logging
 import re
 
+try:
+    from .utils import FlexibleOptionalInputType
+except ImportError:  # importable for tests without package context
+    from utils import FlexibleOptionalInputType
+
+log = logging.getLogger("MoonPack")
+
+
+def _input_index(key: str) -> int:
+    """Extracts the trailing integer from 'input_N'; returns -1 if unparseable."""
+    try:
+        return int(key.split("_")[-1])
+    except (IndexError, ValueError):
+        return -1
+
+
 class DynamicStringConcat:
-    """
-    Eine dynamische String-Concat-Node, die automatisch neue Inputs hinzufügt,
-    sobald alle vorhandenen Inputs belegt sind, ähnlich wie die rgthree Any Switch Node.
-    """
-    
-    def __init__(self):
-        pass
-        
+    """Auto-expanding string concatenator with optional template-based interpolation."""
+
+    DESCRIPTION = (
+        "Concatenates connected string inputs in slot order. If 'template' is non-empty, "
+        "slots are interpolated into placeholders {1}, {2}, … instead of joined."
+    )
+    SEARCH_ALIASES = ["join", "concat", "merge", "string", "template"]
+
     @classmethod
     def INPUT_TYPES(cls):
-        """
-        Definiert die Input-Typen für die Node.
-        Die Anzahl der Inputs wird dynamisch erweitert.
-        """
         return {
             "required": {
-                "separator": ("STRING", {"default": " ", "multiline": False}),
-                "ignore_empty": ("BOOLEAN", {"default": True}),
+                "separator": ("STRING", {
+                    "default": " ", "multiline": False,
+                    "tooltip": "Separator placed between joined strings (ignored when 'template' is non-empty).",
+                }),
+                "ignore_empty": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Skip inputs that are empty after stripping (join mode only).",
+                }),
+                "strip_whitespace": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Strip leading/trailing whitespace from each input before joining.",
+                }),
+                "prefix": ("STRING", {
+                    "default": "", "multiline": False,
+                    "tooltip": "Prepended to the final result.",
+                }),
+                "suffix": ("STRING", {
+                    "default": "", "multiline": False,
+                    "tooltip": "Appended to the final result.",
+                }),
+                "template": ("STRING", {
+                    "default": "", "multiline": True,
+                    "placeholder": "Optional. Use {1}, {2}, … for slot N. e.g. '{1}, in the style of {2}'",
+                    "tooltip": "If non-empty, slots are interpolated into {N} placeholders instead of joined.",
+                }),
             },
-            "optional": FlexibleOptionalInputType("STRING")
+            "optional": FlexibleOptionalInputType("STRING"),
         }
-    
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("concatenated_string",)
-    FUNCTION = "concatenate_strings"
-    CATEGORY = "utils"
-    OUTPUT_NODE = False
-    
-    def concatenate_strings(self, separator=" ", ignore_empty=True, **kwargs):
-        """
-        Führt alle bereitgestellten String-Inputs zusammen.
-        
-        Args:
-            separator (str): Trennzeichen zwischen den Strings
-            ignore_empty (bool): Ob leere Strings ignoriert werden sollen
-            **kwargs: Alle Input-Strings
-            
-        Returns:
-            tuple: (zusammengeführter String)
-        """
-        # Sammle alle Input-Strings
-        inputs = []
-        
-        # Sortiere die Inputs numerisch, um die korrekte Reihenfolge sicherzustellen
-        sorted_items = sorted(kwargs.items(), key=lambda item: int(item[0].split('_')[1]) if item[0].startswith("input_") else -1)
 
-        for key, value in sorted_items:
-            if key.startswith("input_") and value is not None:
-                if isinstance(value, (list, tuple)):
-                    # Falls es ein Array ist, nimm das erste Element
-                    value = value[0] if len(value) > 0 else ""
-                
-                # Wandle zu String um
-                str_value = str(value).strip()
-                
-                # Füge hinzu, wenn nicht leer oder wenn leere Strings nicht ignoriert werden
-                if str_value or not ignore_empty:
-                    inputs.append(str_value)
-        
-        # Führe alle Strings zusammen
-        result = separator.join(inputs)
-        
-        print(f"Dynamic String Concat: Concatenated {len(inputs)} inputs: '{result}'")
-        
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("text",)
+    FUNCTION = "concatenate"
+    CATEGORY = "MoonPack/string"
+    OUTPUT_NODE = False
+
+    def concatenate(self, separator=" ", ignore_empty=True, strip_whitespace=True,
+                    prefix="", suffix="", template="", **kwargs):
+        slots = {}
+        for key, value in kwargs.items():
+            if not key.startswith("input_"):
+                continue
+            idx = _input_index(key)
+            if idx < 0 or value is None:
+                continue
+            if isinstance(value, (list, tuple)):
+                value = value[0] if len(value) > 0 else ""
+            s = str(value)
+            if strip_whitespace:
+                s = s.strip()
+            slots[idx] = s
+
+        if template.strip():
+            def _resolve(match):
+                return slots.get(int(match.group(1)), "")
+            body = re.sub(r"\{(\d+)\}", _resolve, template)
+        else:
+            ordered = [slots[k] for k in sorted(slots.keys())]
+            if ignore_empty:
+                ordered = [s for s in ordered if s]
+            body = separator.join(ordered)
+
+        result = f"{prefix}{body}{suffix}"
+        log.debug("DynamicStringConcat: %d slots → %d chars", len(slots), len(result))
         return (result,)
 
 
-# Node-Mappings für ComfyUI
 NODE_CLASS_MAPPINGS = {
-    "DynamicStringConcat": DynamicStringConcat
+    "MoonPack_DynamicStringConcat": DynamicStringConcat,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "DynamicStringConcat": "Dynamic String Concat"
+    "MoonPack_DynamicStringConcat": "Dynamic String Concat",
 }

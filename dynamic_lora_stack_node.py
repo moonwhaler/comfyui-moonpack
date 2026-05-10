@@ -1,43 +1,64 @@
-from .utils import FlexibleOptionalInputType
+import logging
+
+try:
+    from .utils import FlexibleOptionalInputType
+except ImportError:  # importable for tests without package context
+    from utils import FlexibleOptionalInputType
+
+log = logging.getLogger("MoonPack")
+
+
+def _input_index(key: str) -> int:
+    try:
+        return int(key.split("_")[-1])
+    except (IndexError, ValueError):
+        return -1
 
 
 class DynamicLoraStack:
+    DESCRIPTION = (
+        "Stacks WANVIDLORA inputs with auto-expanding slots. "
+        "Flattens nested lists; an empty stack returns [] (not None)."
+    )
+    SEARCH_ALIASES = ["lora", "stack", "wan", "wanvideo"]
+
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {},
-            "optional": FlexibleOptionalInputType("WANVIDLORA")
+            "optional": FlexibleOptionalInputType("WANVIDLORA"),
         }
 
     RETURN_TYPES = ("WANVIDLORA",)
+    RETURN_NAMES = ("lora_stack",)
     FUNCTION = "stack_loras"
-    CATEGORY = "moonpack/lora"
+    CATEGORY = "MoonPack/lora"
 
     def stack_loras(self, **kwargs):
-        loras = []
-        # Sort kwargs by key to maintain the order of inputs
-        sorted_items = sorted(kwargs.items(), key=lambda item: int(item[0].split('_')[1]))
-        for key, value in sorted_items:
-            if key.startswith("lora_") and value is not None:
-                loras.append(value)
+        items = []
+        for key, value in kwargs.items():
+            if not key.startswith("lora_") or value is None:
+                continue
+            if _input_index(key) < 0:
+                continue
+            items.append((key, value))
+        items.sort(key=lambda kv: _input_index(kv[0]))
 
-        if not loras:
-            return (None,)
-
-        # Flatten the list of loras, as some inputs might be stacks themselves
-        stacked_loras = []
-        for lora in loras:
-            if isinstance(lora, list):
-                stacked_loras.extend(lora)
+        stacked = []
+        for _, value in items:
+            if isinstance(value, list):
+                stacked.extend(value)
             else:
-                stacked_loras.append(lora)
+                stacked.append(value)
 
-        return (stacked_loras,)
+        log.debug("DynamicLoraStack: %d slots → stack of %d", len(items), len(stacked))
+        return (stacked,)
+
 
 NODE_CLASS_MAPPINGS = {
-    "DynamicLoraStack": DynamicLoraStack
+    "MoonPack_DynamicLoraStack": DynamicLoraStack,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "DynamicLoraStack": "Dynamic LoRA Stack"
+    "MoonPack_DynamicLoraStack": "Dynamic LoRA Stack",
 }

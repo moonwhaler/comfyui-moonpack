@@ -1,571 +1,445 @@
-import { app } from "/scripts/app.js";
+import { app } from "../../scripts/app.js";
 
 const MIN_INPUTS = 1;
 
-/**
- * Adds dynamic input handling to a node type.
- * @param {object} nodeType The node class to modify.
- * @param {object} nodeData The node's registration data.
- */
+// Both legacy v0.1 keys and the new MoonPack_* keys map to the same handlers
+// so workflows saved before the rename keep working.
+const DYNAMIC_INPUT_NODES = {
+    "DynamicLoraStack":              { prefix: "lora_",  type: "WANVIDLORA" },
+    "MoonPack_DynamicLoraStack":     { prefix: "lora_",  type: "WANVIDLORA" },
+    "DynamicStringConcat":           { prefix: "input_", type: "STRING"     },
+    "MoonPack_DynamicStringConcat":  { prefix: "input_", type: "STRING"     },
+};
+const FAST_BYPASSER_NODES = new Set(["FastNodeBypasser", "MoonPack_FastNodeBypasser"]);
+
+
 function addDynamicInputSupport(nodeType, nodeData) {
-    const input_prefix = nodeData.name === "DynamicLoraStack" ? "lora_" : "input_";
-    const input_type = nodeData.name === "DynamicLoraStack" ? "WANVIDLORA" : "STRING";
+    const { prefix, type } = DYNAMIC_INPUT_NODES[nodeData.name];
 
-    // --- Add state and a polling stabilizer to the node's prototype ---
-    nodeType.prototype.schedulePromise = null;
-
-    nodeType.prototype.scheduleStabilize = function(ms = 100) {
-        if (!this.schedulePromise) {
-            this.schedulePromise = new Promise((resolve) => {
-                setTimeout(() => {
-                    this.schedulePromise = null;
-                    this.stabilize();
-                    resolve();
-                }, ms);
-            });
-        }
-        return this.schedulePromise;
+    nodeType.prototype.getDynInputs = function () {
+        const inputs = (this.inputs || []).filter(
+            (i) => i && i.name && i.name.startsWith(prefix),
+        );
+        inputs.sort((a, b) => {
+            const ai = parseInt(a.name.split("_").pop(), 10);
+            const bi = parseInt(b.name.split("_").pop(), 10);
+            return ai - bi;
+        });
+        return inputs;
     };
 
-    nodeType.prototype.stabilize = function() {
-        let optionalInputs = this.getOptionalInputs();
+    nodeType.prototype.stabilizeDynInputs = function () {
+        if (!this.graph) return;
         let changed = false;
 
-        // Ensure there's always one empty input at the end.
-        if (optionalInputs.length === 0 || optionalInputs[optionalInputs.length - 1].link != null) {
-            const nextIndex = optionalInputs.length > 0 ? parseInt(optionalInputs[optionalInputs.length - 1].name.split('_').pop(), 10) + 1 : 1;
-            this.addInput(`${input_prefix}${nextIndex}`, input_type);
-            changed = true;
-            optionalInputs = this.getOptionalInputs(); // Refresh after adding
-        }
-
-        // Clean up any disconnected inputs from the end, but always leave at least one.
-        for (let i = optionalInputs.length - 2; i >= 0; i--) {
-            if (optionalInputs[i].link == null && optionalInputs[i+1].link == null) {
-                this.removeInput(this.findInputSlot(optionalInputs[i].name));
+        // Trim trailing empty inputs (keep one empty at the very end).
+        let dyn = this.getDynInputs();
+        for (let i = dyn.length - 1; i > 0; i--) {
+            if (dyn[i].link == null && dyn[i - 1].link == null) {
+                this.removeInput(this.findInputSlot(dyn[i].name));
                 changed = true;
             } else {
                 break;
             }
         }
+        dyn = this.getDynInputs();
 
-        // Ensure minimum inputs are present.
-        while (this.getOptionalInputs().length < MIN_INPUTS) {
-            const nextIndex = this.getOptionalInputs().length + 1;
-            this.addInput(`${input_prefix}${nextIndex}`, input_type);
+        // Ensure exactly one trailing empty input.
+        if (dyn.length === 0 || dyn[dyn.length - 1].link != null) {
+            const next = dyn.length > 0
+                ? parseInt(dyn[dyn.length - 1].name.split("_").pop(), 10) + 1
+                : 1;
+            this.addInput(`${prefix}${next}`, type);
             changed = true;
         }
 
-        if (changed) {
-            this.setDirtyCanvas(true, true);
+        // Enforce minimum slot count.
+        while (this.getDynInputs().length < MIN_INPUTS) {
+            const next = this.getDynInputs().length + 1;
+            this.addInput(`${prefix}${next}`, type);
+            changed = true;
         }
 
-        // Re-schedule the next check to create the self-correcting loop.
-        this.scheduleStabilize(500);
+        if (changed) this.setDirtyCanvas(true, true);
     };
 
-    nodeType.prototype.getOptionalInputs = function() {
-        const inputs = this.inputs?.filter(i => i.name.startsWith(input_prefix)) || [];
-        inputs.sort((a, b) => {
-            const a_index = parseInt(a.name.split('_').pop(), 10);
-            const b_index = parseInt(b.name.split('_').pop(), 10);
-            return a_index - b_index;
-        });
-        return inputs;
-    };
-
-    // --- Hijack existing methods to add our logic ---
-
-    // When a node is created, set it up and start the stabilizer.
     const onNodeCreated = nodeType.prototype.onNodeCreated;
-    nodeType.prototype.onNodeCreated = function() {
+    nodeType.prototype.onNodeCreated = function () {
         onNodeCreated?.apply(this, arguments);
-        // Add initial inputs if they don't exist.
-        if (!this.inputs || this.inputs.filter(i => i.name.startsWith(input_prefix)).length === 0) {
-             for (let i = 0; i < MIN_INPUTS; i++) {
-                this.addInput(`${input_prefix}${i + 1}`, input_type);
+        if (
+            !this.inputs ||
+            !this.inputs.some((i) => i.name && i.name.startsWith(prefix))
+        ) {
+            for (let i = 0; i < MIN_INPUTS; i++) {
+                this.addInput(`${prefix}${i + 1}`, type);
             }
         }
-        this.scheduleStabilize();
+        this.stabilizeDynInputs();
     };
 
-    // Any connection change should trigger a stabilization check.
-    const onConnectionsChange = nodeType.prototype.onConnectionsChange;
-    nodeType.prototype.onConnectionsChange = function() {
-        onConnectionsChange?.apply(this, arguments);
-        this.scheduleStabilize();
+    const onConfigure = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function () {
+        onConfigure?.apply(this, arguments);
+        this.stabilizeDynInputs();
     };
-    
-    // When cloning, ensure the new node is also stabilized.
+
+    const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+    nodeType.prototype.onConnectionsChange = function () {
+        onConnectionsChange?.apply(this, arguments);
+        this.stabilizeDynInputs();
+    };
+
     const onClone = nodeType.prototype.clone;
-    nodeType.prototype.clone = function() {
+    nodeType.prototype.clone = function () {
         const cloned = onClone?.apply(this, arguments);
         if (cloned) {
-            // Use a timeout to ensure the clone is fully added to the graph before stabilizing.
-            setTimeout(() => {
-                if(cloned.scheduleStabilize) {
-                    cloned.scheduleStabilize();
-                }
-            }, 200);
+            const onAdded = cloned.onAdded;
+            cloned.onAdded = function () {
+                onAdded?.apply(this, arguments);
+                if (this.stabilizeDynInputs) this.stabilizeDynInputs();
+            };
         }
         return cloned;
     };
 }
 
-/**
- * Adds fast node bypasser functionality
- * @param {object} nodeType The node class to modify
- * @param {object} nodeData The node's registration data
- */
-function addFastNodeBypasserSupport(nodeType, nodeData) {
+
+function addFastNodeBypasserSupport(nodeType) {
     const MODE_ALWAYS = 0;
     const MODE_BYPASS = 4;
-    const PROPERTY_MATCH_TITLE = "matchTitle";
-    const PROPERTY_SORT = "sort";
-    const PROPERTY_SORT_CUSTOM_ALPHA = "customSortAlphabet";
-    const PROPERTY_RESTRICTION = "toggleRestriction";
+    const PROP_MATCH       = "matchTitle";
+    const PROP_SORT        = "sort";
+    const PROP_SORT_ALPHA  = "customSortAlphabet";
+    const PROP_RESTRICT    = "toggleRestriction";
 
-    // Define properties following the exact same pattern as fast groups bypasser
     nodeType["@matchTitle"] = { type: "string" };
     nodeType["@sort"] = {
         type: "combo",
-        values: ["position", "alphanumeric", "custom alphabet"]
+        values: ["position", "alphanumeric", "custom alphabet"],
     };
     nodeType["@customSortAlphabet"] = { type: "string" };
     nodeType["@toggleRestriction"] = {
         type: "combo",
-        values: ["default", "max one", "always one"]
+        values: ["default", "max one", "always one"],
     };
 
-    nodeType.prototype.schedulePromise = null;
-
-    nodeType.prototype.scheduleStabilize = function(ms = 100) {
-        if (!this.schedulePromise) {
-            this.schedulePromise = new Promise((resolve) => {
-                setTimeout(() => {
-                    this.schedulePromise = null;
-                    this.stabilize();
-                    resolve();
-                }, ms);
-            });
-        }
-        return this.schedulePromise;
-    };
-
-    nodeType.prototype.getConnectedNodes = function() {
-        const connectedNodes = [];
-        if (!this.inputs) return connectedNodes;
-
-        for (const input of this.inputs) {
-            if (input.link != null) {
-                const link = app.graph.links[input.link];
-                if (link) {
-                    const originNode = app.graph.getNodeById(link.origin_id);
-                    if (originNode) {
-                        connectedNodes.push({
-                            node: originNode,
-                            inputIndex: this.inputs.indexOf(input)
-                        });
-                    }
-                }
-            }
-        }
-        return connectedNodes;
-    };
-
-    nodeType.prototype.getNodesToControl = function() {
-        // If matchTitle is set, use pattern matching instead of connections
-        const matchTitle = this.properties?.[PROPERTY_MATCH_TITLE]?.trim();
-        let nodesToControl = [];
-
-        if (matchTitle) {
-            const matchedNodes = [];
-            try {
-                const regex = new RegExp(matchTitle, "i");
-                const allNodes = app.graph._nodes || [];
-
-                for (const node of allNodes) {
-                    // Don't match ourselves
-                    if (node === this) continue;
-
-                    if (regex.exec(node.title)) {
-                        matchedNodes.push({
-                            node: node,
-                            inputIndex: -1 // Not connected via input
-                        });
-                    }
-                }
-            } catch (e) {
-                console.error("Invalid regex pattern in matchTitle:", e);
-            }
-            nodesToControl = matchedNodes;
+    nodeType.prototype._cachedRegex = function () {
+        const pat = this.properties?.[PROP_MATCH]?.trim() || "";
+        if (this._regexCacheKey === pat) return this._regexCache;
+        this._regexCacheKey = pat;
+        if (!pat) {
+            this._regexCache = null;
         } else {
-            // Otherwise, use the traditional connection-based approach
-            nodesToControl = this.getConnectedNodes();
+            try {
+                this._regexCache = new RegExp(pat, "i");
+            } catch (e) {
+                console.error("[MoonPack] FastNodeBypasser invalid regex:", pat, e);
+                this._regexCache = null;
+            }
+        }
+        return this._regexCache;
+    };
+
+    nodeType.prototype.getConnectedNodes = function () {
+        const out = [];
+        if (!this.inputs) return out;
+        for (const input of this.inputs) {
+            if (input.link == null) continue;
+            const link = app.graph.links[input.link];
+            if (!link) continue;
+            const origin = app.graph.getNodeById(link.origin_id);
+            if (origin) out.push({ node: origin, inputIndex: this.inputs.indexOf(input) });
+        }
+        return out;
+    };
+
+    nodeType.prototype.getNodesToControl = function () {
+        const regex = this._cachedRegex();
+        let nodes;
+        if (regex) {
+            nodes = [];
+            for (const n of (app.graph._nodes || [])) {
+                if (n === this) continue;
+                if (regex.exec(n.title || "")) {
+                    nodes.push({ node: n, inputIndex: -1 });
+                }
+            }
+        } else {
+            nodes = this.getConnectedNodes();
         }
 
-        // Apply sorting
-        const sort = this.properties?.[PROPERTY_SORT] || "position";
-
+        const sort = this.properties?.[PROP_SORT] || "position";
         if (sort === "alphanumeric") {
-            nodesToControl.sort((a, b) => a.node.title.localeCompare(b.node.title));
+            nodes.sort((a, b) => a.node.title.localeCompare(b.node.title));
         } else if (sort === "custom alphabet") {
-            let customAlphabet = null;
-            const customAlphaStr = this.properties?.[PROPERTY_SORT_CUSTOM_ALPHA]?.replace(/\n/g, "");
-            if (customAlphaStr && customAlphaStr.trim()) {
-                customAlphabet = customAlphaStr.includes(",")
-                    ? customAlphaStr.toLocaleLowerCase().split(",")
-                    : customAlphaStr.toLocaleLowerCase().trim().split("");
-            }
-
-            if (customAlphabet?.length) {
-                nodesToControl.sort((a, b) => {
-                    let aIndex = -1;
-                    let bIndex = -1;
-                    // Loop and find indexes
-                    for (const [index, alpha] of customAlphabet.entries()) {
-                        aIndex = aIndex < 0 ? (a.node.title.toLocaleLowerCase().startsWith(alpha) ? index : -1) : aIndex;
-                        bIndex = bIndex < 0 ? (b.node.title.toLocaleLowerCase().startsWith(alpha) ? index : -1) : bIndex;
-                        if (aIndex > -1 && bIndex > -1) {
-                            break;
-                        }
+            const raw = (this.properties?.[PROP_SORT_ALPHA] || "").replace(/\n/g, "");
+            const alpha = raw.includes(",")
+                ? raw.toLocaleLowerCase().split(",")
+                : raw.toLocaleLowerCase().trim().split("");
+            if (alpha?.length && alpha[0]) {
+                nodes.sort((a, b) => {
+                    const tA = a.node.title.toLocaleLowerCase();
+                    const tB = b.node.title.toLocaleLowerCase();
+                    let ai = -1, bi = -1;
+                    for (let i = 0; i < alpha.length; i++) {
+                        if (ai < 0 && tA.startsWith(alpha[i])) ai = i;
+                        if (bi < 0 && tB.startsWith(alpha[i])) bi = i;
+                        if (ai > -1 && bi > -1) break;
                     }
-                    // Now compare
-                    if (aIndex > -1 && bIndex > -1) {
-                        const ret = aIndex - bIndex;
-                        if (ret === 0) {
-                            return a.node.title.localeCompare(b.node.title);
-                        }
-                        return ret;
-                    } else if (aIndex > -1) {
-                        return -1;
-                    } else if (bIndex > -1) {
-                        return 1;
-                    }
+                    if (ai > -1 && bi > -1) {
+                        return ai !== bi ? ai - bi : a.node.title.localeCompare(b.node.title);
+                    } else if (ai > -1) return -1;
+                    else if (bi > -1) return 1;
                     return a.node.title.localeCompare(b.node.title);
                 });
             } else {
-                // Fallback to alphanumeric if custom alphabet is invalid
-                nodesToControl.sort((a, b) => a.node.title.localeCompare(b.node.title));
+                nodes.sort((a, b) => a.node.title.localeCompare(b.node.title));
             }
-        } else if (sort === "position") {
-            nodesToControl.sort((a, b) => {
-                // Sort by Y position first, then X position
-                const yDiff = a.node.pos[1] - b.node.pos[1];
-                if (Math.abs(yDiff) > 10) { // Use threshold for "same row"
-                    return yDiff;
-                }
+        } else {
+            // position
+            nodes.sort((a, b) => {
+                const dy = a.node.pos[1] - b.node.pos[1];
+                if (Math.abs(dy) > 10) return dy;
                 return a.node.pos[0] - b.node.pos[0];
             });
         }
 
-        return nodesToControl;
+        return nodes;
     };
 
-    nodeType.prototype.stabilize = function() {
+    nodeType.prototype._applyRestriction = function (widget, value) {
+        const restriction = this.properties?.[PROP_RESTRICT] || "default";
+        if (value && restriction.includes(" one")) {
+            for (const w of (this.widgets || [])) {
+                if (w === widget || !w._controlledNodeId) continue;
+                const other = app.graph.getNodeById(w._controlledNodeId);
+                if (other) {
+                    other.mode = MODE_BYPASS;
+                    w.value = false;
+                }
+            }
+        } else if (!value && restriction === "always one") {
+            const anyOther = (this.widgets || []).some((w) => w !== widget && w.value);
+            if (!anyOther) value = true;
+        }
+        return value;
+    };
+
+    nodeType.prototype.removeWidgetSafe = function (slot) {
+        if (!this.widgets) return;
+        const w = typeof slot === "number" ? this.widgets[slot] : slot;
+        const idx = this.widgets.indexOf(w);
+        if (idx !== -1) this.widgets.splice(idx, 1);
+    };
+
+    nodeType.prototype.stabilizeBypasser = function () {
         if (!this.graph) return;
-
         let changed = false;
-        const nodesToControl = this.getNodesToControl();
-
-        // Store current width to preserve it during changes
+        const nodes = this.getNodesToControl();
         const tempWidth = this.size[0];
 
-        // Only manage inputs if we're using connection-based mode (not matchTitle)
-        const matchTitle = this.properties?.[PROPERTY_MATCH_TITLE]?.trim();
-        if (!matchTitle) {
-            // Ensure we have enough inputs (always one empty at the end)
-            const lastInput = this.inputs[this.inputs.length - 1];
-            if (!lastInput || lastInput.link != null) {
-                this.addInput(`bypass_node_${this.inputs.length}`, "*");
+        // Manage inputs only when in connection mode (no matchTitle).
+        const useConnections = !this._cachedRegex();
+        if (useConnections) {
+            const last = this.inputs[this.inputs.length - 1];
+            if (!last || last.link != null) {
+                this.addInput(`bypass_node_${(this.inputs?.length) || 0}`, "*");
                 changed = true;
             }
-
-            // Remove empty inputs from the middle
             for (let i = this.inputs.length - 2; i >= 0; i--) {
                 if (this.inputs[i].link == null) {
                     this.removeInput(i);
                     changed = true;
                 }
             }
-
-            // Ensure at least one input exists
             if (this.inputs.length === 0) {
                 this.addInput("bypass_node_0", "*");
                 changed = true;
             }
         }
 
-        // Update widgets to match nodes to control
         const widgetCount = this.widgets ? this.widgets.length : 0;
-        const nodeCount = nodesToControl.length;
+        const nodeCount = nodes.length;
 
-        // Add widgets for new nodes
+        // Add widgets for newly-controlled nodes.
         for (let i = widgetCount; i < nodeCount; i++) {
-            const controlledNode = nodesToControl[i].node;
+            const target = nodes[i].node;
             const widget = this.addWidget(
                 "toggle",
-                `Enable ${controlledNode.title}`,
-                controlledNode.mode === MODE_ALWAYS,
-                (value) => {
-                    // Handle toggle restriction
-                    const restriction = this.properties?.[PROPERTY_RESTRICTION] || "default";
-
-                    if (value && restriction?.includes(" one")) {
-                        // If enabling and we have a "max one" or "always one" restriction, disable all others
-                        for (const w of this.widgets) {
-                            if (w !== widget && w._controlledNodeId) {
-                                const otherNode = app.graph.getNodeById(w._controlledNodeId);
-                                if (otherNode) {
-                                    otherNode.mode = MODE_BYPASS;
-                                    w.value = false;
-                                }
-                            }
-                        }
-                    } else if (!value && restriction === "always one") {
-                        // If disabling and we have "always one" restriction, check if we're the last one
-                        const anyEnabled = this.widgets.some(w => w !== widget && w.value);
-                        if (!anyEnabled) {
-                            // Don't allow disabling the last one
-                            value = true;
-                        }
-                    }
-
-                    // Toggle the node's mode
-                    controlledNode.mode = value ? MODE_ALWAYS : MODE_BYPASS;
-                    widget.value = value; // Ensure widget reflects the final state
+                `Enable ${target.title}`,
+                target.mode === MODE_ALWAYS,
+                (val) => {
+                    val = this._applyRestriction(widget, val);
+                    target.mode = val ? MODE_ALWAYS : MODE_BYPASS;
+                    widget.value = val;
                     app.graph.setDirtyCanvas(true, false);
                 },
-                { on: "active", off: "bypass" }
+                { on: "active", off: "bypass" },
             );
-            widget._controlledNodeId = controlledNode.id;
+            widget._controlledNodeId = target.id;
             changed = true;
         }
 
-        // Remove excess widgets
+        // Drop excess widgets.
         while (this.widgets && this.widgets.length > nodeCount) {
-            this.removeWidget(this.widgets.length - 1);
+            this.removeWidgetSafe(this.widgets.length - 1);
             changed = true;
         }
 
-        // Update existing widgets
+        // Sync remaining widgets with current target state.
         if (this.widgets) {
             for (let i = 0; i < this.widgets.length; i++) {
-                const widget = this.widgets[i];
-                const controlledNode = nodesToControl[i]?.node;
-
-                if (controlledNode) {
-                    const newName = `Enable ${controlledNode.title}`;
-                    const newValue = controlledNode.mode === MODE_ALWAYS;
-
-                    if (widget.name !== newName) {
-                        widget.name = newName;
-                        changed = true;
-                    }
-
-                    if (widget.value !== newValue) {
-                        widget.value = newValue;
-                        changed = true;
-                    }
-
-                    widget._controlledNodeId = controlledNode.id;
-
-                    // Update the callback to reference the current node and handle restrictions
-                    widget.callback = (value) => {
-                        // Handle toggle restriction
-                        const restriction = this.properties?.[PROPERTY_RESTRICTION] || "default";
-
-                        if (value && restriction?.includes(" one")) {
-                            // If enabling and we have a "max one" or "always one" restriction, disable all others
-                            for (const w of this.widgets) {
-                                if (w !== widget && w._controlledNodeId) {
-                                    const otherNode = app.graph.getNodeById(w._controlledNodeId);
-                                    if (otherNode) {
-                                        otherNode.mode = MODE_BYPASS;
-                                        w.value = false;
-                                    }
-                                }
-                            }
-                        } else if (!value && restriction === "always one") {
-                            // If disabling and we have "always one" restriction, check if we're the last one
-                            const anyEnabled = this.widgets.some(w => w !== widget && w.value);
-                            if (!anyEnabled) {
-                                // Don't allow disabling the last one
-                                value = true;
-                            }
-                        }
-
-                        // Toggle the node's mode
-                        controlledNode.mode = value ? MODE_ALWAYS : MODE_BYPASS;
-                        widget.value = value; // Ensure widget reflects the final state
-                        app.graph.setDirtyCanvas(true, false);
-                    };
-                }
+                const w = this.widgets[i];
+                const target = nodes[i]?.node;
+                if (!target) continue;
+                const newName = `Enable ${target.title}`;
+                const newVal = target.mode === MODE_ALWAYS;
+                if (w.name !== newName) { w.name = newName; changed = true; }
+                if (w.value !== newVal) { w.value = newVal; changed = true; }
+                w._controlledNodeId = target.id;
+                w.callback = (val) => {
+                    val = this._applyRestriction(w, val);
+                    target.mode = val ? MODE_ALWAYS : MODE_BYPASS;
+                    w.value = val;
+                    app.graph.setDirtyCanvas(true, false);
+                };
             }
         }
 
-        // Restore width
         if (changed) {
             this.size[0] = Math.max(tempWidth, this.size[0]);
             this.setDirtyCanvas(true, true);
         }
-
-        // Schedule next stabilization
-        this.scheduleStabilize(500);
     };
 
-    // Add context menu actions
-    nodeType.prototype.getExtraMenuOptions = function(_, options) {
-        const nodesToControl = this.getNodesToControl();
+    nodeType.prototype.getExtraMenuOptions = function (_, options) {
+        const nodes = this.getNodesToControl();
+        const restriction = this.properties?.[PROP_RESTRICT] || "default";
+        const onlyOne = restriction.includes(" one");
+        const alwaysOne = restriction === "always one";
 
-        if (nodesToControl.length > 0) {
-            options.unshift(
-                {
-                    content: "Bypass All",
-                    callback: () => {
-                        const restriction = this.properties?.[PROPERTY_RESTRICTION] || "default";
-                        const alwaysOne = restriction === "always one";
-
-                        for (let i = 0; i < nodesToControl.length; i++) {
-                            const {node} = nodesToControl[i];
-                            // If "always one" restriction, enable the first, bypass the rest
-                            node.mode = (alwaysOne && i === 0) ? MODE_ALWAYS : MODE_BYPASS;
-                        }
-                        if (this.widgets) {
-                            for (let i = 0; i < this.widgets.length; i++) {
-                                this.widgets[i].value = (alwaysOne && i === 0);
-                            }
-                        }
-                        app.graph.setDirtyCanvas(true, false);
-                    }
+        options.unshift(
+            {
+                content: "Refresh",
+                callback: () => {
+                    this._regexCacheKey = undefined;
+                    while (this.widgets && this.widgets.length > 0) this.removeWidgetSafe(0);
+                    this.stabilizeBypasser();
                 },
-                {
-                    content: "Enable All",
-                    callback: () => {
-                        const restriction = this.properties?.[PROPERTY_RESTRICTION] || "default";
-                        const onlyOne = restriction?.includes(" one");
+            },
+            null,
+        );
 
-                        for (let i = 0; i < nodesToControl.length; i++) {
-                            const {node} = nodesToControl[i];
-                            // If restriction includes "one", only enable the first
-                            node.mode = (onlyOne && i > 0) ? MODE_BYPASS : MODE_ALWAYS;
-                        }
-                        if (this.widgets) {
-                            for (let i = 0; i < this.widgets.length; i++) {
-                                this.widgets[i].value = !(onlyOne && i > 0);
-                            }
-                        }
-                        app.graph.setDirtyCanvas(true, false);
+        if (nodes.length === 0) return;
+
+        options.unshift(
+            {
+                content: "Bypass All",
+                callback: () => {
+                    for (let i = 0; i < nodes.length; i++) {
+                        nodes[i].node.mode = (alwaysOne && i === 0) ? MODE_ALWAYS : MODE_BYPASS;
                     }
-                },
-                {
-                    content: "Toggle All",
-                    callback: () => {
-                        const restriction = this.properties?.[PROPERTY_RESTRICTION] || "default";
-                        const onlyOne = restriction?.includes(" one");
-                        let foundOne = false;
-
-                        for (let i = 0; i < nodesToControl.length; i++) {
-                            const {node} = nodesToControl[i];
-                            // If you have only one, then we'll stop at the first
-                            let newValue = onlyOne && foundOne ? false : node.mode !== MODE_ALWAYS;
-                            foundOne = foundOne || newValue;
-                            node.mode = newValue ? MODE_ALWAYS : MODE_BYPASS;
+                    if (this.widgets) {
+                        for (let i = 0; i < this.widgets.length; i++) {
+                            this.widgets[i].value = (alwaysOne && i === 0);
                         }
-
-                        // And if you have always one, then we'll flip the last
-                        if (!foundOne && restriction === "always one" && nodesToControl.length > 0) {
-                            nodesToControl[nodesToControl.length - 1].node.mode = MODE_ALWAYS;
-                        }
-
-                        if (this.widgets) {
-                            for (let i = 0; i < this.widgets.length; i++) {
-                                const widget = this.widgets[i];
-                                const controlledNode = nodesToControl[i]?.node;
-                                if (controlledNode) {
-                                    widget.value = controlledNode.mode === MODE_ALWAYS;
-                                }
-                            }
-                        }
-                        app.graph.setDirtyCanvas(true, false);
                     }
+                    app.graph.setDirtyCanvas(true, false);
                 },
-                null // separator
-            );
-        }
+            },
+            {
+                content: "Enable All",
+                callback: () => {
+                    for (let i = 0; i < nodes.length; i++) {
+                        nodes[i].node.mode = (onlyOne && i > 0) ? MODE_BYPASS : MODE_ALWAYS;
+                    }
+                    if (this.widgets) {
+                        for (let i = 0; i < this.widgets.length; i++) {
+                            this.widgets[i].value = !(onlyOne && i > 0);
+                        }
+                    }
+                    app.graph.setDirtyCanvas(true, false);
+                },
+            },
+            {
+                content: "Toggle All",
+                callback: () => {
+                    let foundOne = false;
+                    for (let i = 0; i < nodes.length; i++) {
+                        const newVal = onlyOne && foundOne ? false : nodes[i].node.mode !== MODE_ALWAYS;
+                        foundOne = foundOne || newVal;
+                        nodes[i].node.mode = newVal ? MODE_ALWAYS : MODE_BYPASS;
+                    }
+                    if (!foundOne && alwaysOne && nodes.length > 0) {
+                        nodes[nodes.length - 1].node.mode = MODE_ALWAYS;
+                    }
+                    if (this.widgets) {
+                        for (let i = 0; i < this.widgets.length; i++) {
+                            const t = nodes[i]?.node;
+                            if (t) this.widgets[i].value = t.mode === MODE_ALWAYS;
+                        }
+                    }
+                    app.graph.setDirtyCanvas(true, false);
+                },
+            },
+            null,
+        );
     };
 
-    // Initialize on node creation
     const onNodeCreated = nodeType.prototype.onNodeCreated;
-    nodeType.prototype.onNodeCreated = function() {
+    nodeType.prototype.onNodeCreated = function () {
         onNodeCreated?.apply(this, arguments);
-
-        // Initialize properties following the exact same pattern as fast groups bypasser
-        if (!this.properties) {
-            this.properties = {};
-        }
-        if (this.properties[PROPERTY_MATCH_TITLE] === undefined) {
-            this.properties[PROPERTY_MATCH_TITLE] = "";
-        }
-        if (this.properties[PROPERTY_SORT] === undefined) {
-            this.properties[PROPERTY_SORT] = "position";
-        }
-        if (this.properties[PROPERTY_SORT_CUSTOM_ALPHA] === undefined) {
-            this.properties[PROPERTY_SORT_CUSTOM_ALPHA] = "";
-        }
-        if (this.properties[PROPERTY_RESTRICTION] === undefined) {
-            this.properties[PROPERTY_RESTRICTION] = "default";
-        }
-
-        // Add initial input if none exist
-        if (!this.inputs || this.inputs.length === 0) {
-            this.addInput("bypass_node_0", "*");
-        }
-
-        this.scheduleStabilize();
+        if (!this.properties) this.properties = {};
+        if (this.properties[PROP_MATCH] === undefined)      this.properties[PROP_MATCH] = "";
+        if (this.properties[PROP_SORT] === undefined)       this.properties[PROP_SORT] = "position";
+        if (this.properties[PROP_SORT_ALPHA] === undefined) this.properties[PROP_SORT_ALPHA] = "";
+        if (this.properties[PROP_RESTRICT] === undefined)   this.properties[PROP_RESTRICT] = "default";
+        if (!this.inputs || this.inputs.length === 0) this.addInput("bypass_node_0", "*");
+        this.stabilizeBypasser();
     };
 
-    // Handle connection changes
+    const onConfigure = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function () {
+        onConfigure?.apply(this, arguments);
+        this.stabilizeBypasser();
+    };
+
     const onConnectionsChange = nodeType.prototype.onConnectionsChange;
-    nodeType.prototype.onConnectionsChange = function(type, index, connected, link_info) {
+    nodeType.prototype.onConnectionsChange = function () {
         onConnectionsChange?.apply(this, arguments);
-        this.scheduleStabilize();
+        this.stabilizeBypasser();
     };
 
-    // Handle removal of widgets
-    nodeType.prototype.removeWidget = function(slot) {
-        if (this.widgets) {
-            const widget = typeof slot === "number" ? this.widgets[slot] : slot;
-            const index = this.widgets.indexOf(widget);
-            if (index !== -1) {
-                this.widgets.splice(index, 1);
-            }
-        }
-    };
-
-    // Handle property changes (e.g., when matchTitle or sort is updated)
     const onPropertyChanged = nodeType.prototype.onPropertyChanged;
-    nodeType.prototype.onPropertyChanged = function(property, value) {
+    nodeType.prototype.onPropertyChanged = function (property) {
         onPropertyChanged?.apply(this, arguments);
-        if (property === PROPERTY_MATCH_TITLE || property === PROPERTY_SORT || property === PROPERTY_SORT_CUSTOM_ALPHA) {
-            // Clear all widgets and refresh when matchTitle or sort changes
-            while (this.widgets && this.widgets.length > 0) {
-                this.removeWidget(0);
-            }
-            this.scheduleStabilize(10); // Quick refresh
+        if (
+            property === PROP_MATCH ||
+            property === PROP_SORT ||
+            property === PROP_SORT_ALPHA
+        ) {
+            this._regexCacheKey = undefined;
+            while (this.widgets && this.widgets.length > 0) this.removeWidgetSafe(0);
+            this.stabilizeBypasser();
         }
     };
 }
 
+
 app.registerExtension({
-    name: "comfyui.moonpack.dynamicNodes",
-    async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "DynamicLoraStack" || nodeData.name === "DynamicStringConcat") {
+    name: "comfyui.moonpack.dynamic-inputs",
+    async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (DYNAMIC_INPUT_NODES[nodeData.name]) {
             addDynamicInputSupport(nodeType, nodeData);
         }
+    },
+});
 
-        if (nodeData.name === "FastNodeBypasser") {
-            addFastNodeBypasserSupport(nodeType, nodeData);
+app.registerExtension({
+    name: "comfyui.moonpack.fast-bypasser",
+    async beforeRegisterNodeDef(nodeType, nodeData) {
+        if (FAST_BYPASSER_NODES.has(nodeData.name)) {
+            addFastNodeBypasserSupport(nodeType);
         }
     },
 });

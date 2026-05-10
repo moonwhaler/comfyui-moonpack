@@ -1,45 +1,35 @@
-from .utils import any_type
-
-
 class FastNodeBypasser:
-    """
-    A node that allows quick bypassing of connected nodes.
-    Connect any nodes to this bypasser, and it will create toggle controls for each.
-    Alternatively, use the 'matchTitle' property to automatically match nodes by title pattern.
-    """
+    """Virtual control node — all toggle/bypass behavior lives in web/moonpack.js."""
+
+    DESCRIPTION = (
+        "Adds toggle widgets to bypass connected nodes (or nodes whose title matches a regex). "
+        "Right-click for 'Bypass All / Enable All / Toggle All / Refresh'. "
+        "Sort order and toggle restrictions configurable via node properties."
+    )
+    SEARCH_ALIASES = ["bypass", "mute", "toggle", "disable", "enable", "fast groups"]
 
     @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {},
-            "optional": {},
-        }
+    def INPUT_TYPES(cls):
+        return {"required": {}, "optional": {}}
 
     @classmethod
-    def VALIDATE_INPUTS(s, **kwargs):
+    def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
     RETURN_TYPES = ()
-    FUNCTION = "bypass_nodes"
-    CATEGORY = "moonpack/utils"
+    FUNCTION = "noop"
+    CATEGORY = "MoonPack/utils"
     OUTPUT_NODE = False
 
-    # This is a virtual node - it doesn't do any actual processing
-    # All the logic is handled on the frontend (JavaScript)
-
-    def bypass_nodes(self, **kwargs):
-        """
-        This node is a passthrough/virtual node.
-        The actual bypassing logic is handled in the JavaScript frontend.
-        """
-        # Return empty tuple as this is a control node with no outputs
+    def noop(self, **kwargs):
+        # Pure client-side node; no server-side execution required.
         return ()
 
 
 NODE_CLASS_MAPPINGS = {
-    "FastNodeBypasser": FastNodeBypasser
+    "MoonPack_FastNodeBypasser": FastNodeBypasser,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "FastNodeBypasser": "Fast Node Bypasser"
+    "MoonPack_FastNodeBypasser": "Fast Node Bypasser",
 }

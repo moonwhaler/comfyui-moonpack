@@ -11,6 +11,7 @@ class ProportionalDimension:
         target_side (STRING): Whether to apply target_size to "shortest" or "longest" side.
                               - "shortest": Sets minimum resolution (default)
                               - "longest": Sets maximum resolution
+        divisible_by (INT): Snap final width/height to a multiple of this value (1 = no snapping).
 
     Outputs:
         width (INT): The new calculated width.
@@ -18,7 +19,7 @@ class ProportionalDimension:
     """
     def __init__(self):
         pass
-    
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -27,6 +28,7 @@ class ProportionalDimension:
                 "height": ("INT", {"default": 1024, "min": 1, "max": 10000}),
                 "target_size": ("INT", {"default": 480, "min": 1, "max": 10000}),
                 "target_side": (["shortest", "longest"], {"default": "shortest"}),
+                "divisible_by": ("INT", {"default": 1, "min": 1, "max": 1024}),
             }
         }
 
@@ -35,9 +37,9 @@ class ProportionalDimension:
     FUNCTION = "calculate"
     CATEGORY = "dimensions"
 
-    def calculate(self, width, height, target_size, target_side):
+    def calculate(self, width, height, target_size, target_side, divisible_by):
         aspect_ratio = width / height
-        
+
         if target_side == "shortest":
             # Apply target_size to the shorter dimension (minimum resolution)
             if width < height:
@@ -55,9 +57,13 @@ class ProportionalDimension:
                 new_height = target_size
                 new_width = int(new_height * aspect_ratio)
 
+        if divisible_by > 1:
+            new_width = max(divisible_by, int(round(new_width / divisible_by)) * divisible_by)
+            new_height = max(divisible_by, int(round(new_height / divisible_by)) * divisible_by)
+
         shortest_side = min(new_width, new_height)
         longest_side = max(new_width, new_height)
-            
+
         return (new_width, new_height, shortest_side, longest_side,)
 
 NODE_CLASS_MAPPINGS = {

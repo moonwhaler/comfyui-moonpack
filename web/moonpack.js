@@ -256,6 +256,14 @@ function addFastNodeBypasserSupport(nodeType) {
                 this.addInput("bypass_node_0", "*");
                 changed = true;
             }
+        } else {
+            // Title-match mode: connection slots are unused, so hide them.
+            for (let i = (this.inputs?.length || 0) - 1; i >= 0; i--) {
+                if (this.inputs[i].name?.startsWith("bypass_node_")) {
+                    this.removeInput(i);
+                    changed = true;
+                }
+            }
         }
 
         const widgetCount = this.widgets ? this.widgets.length : 0;

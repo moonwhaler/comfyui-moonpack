@@ -32,6 +32,10 @@ from .conditional_bypasser_node import (
     NODE_CLASS_MAPPINGS as cb_class_mappings,
     NODE_DISPLAY_NAME_MAPPINGS as cb_display_mappings,
 )
+from .clean_save_image_node import (
+    NODE_CLASS_MAPPINGS as csi_class_mappings,
+    NODE_DISPLAY_NAME_MAPPINGS as csi_display_mappings,
+)
 
 log = logging.getLogger("MoonPack")
 
@@ -44,6 +48,7 @@ NODE_CLASS_MAPPINGS = {
     **fnb_class_mappings,
     **ss_class_mappings,
     **cb_class_mappings,
+    **csi_class_mappings,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -55,6 +60,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **fnb_display_mappings,
     **ss_display_mappings,
     **cb_display_mappings,
+    **csi_display_mappings,
 }
 
 # Legacy aliases keep workflows saved with v0.1 keys loadable. Remove in 1.0.

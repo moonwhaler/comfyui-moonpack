@@ -1,2 +1,5 @@
 example_code
 __pycache__
+.claude
+docs/superpowers
+**/superpowers

@@ -13,6 +13,7 @@ export const STEPPER_ARROW_WIDTH = 12;
 export const STEPPER_VALUE_WIDTH = 42;
 export const STEPPER_WIDTH = STEPPER_ARROW_WIDTH * 2 + STEPPER_VALUE_WIDTH;
 export const REMOVE_WIDTH = 14;
+export const ARROW_WIDTH = 14;
 
 const TEXT_COLOR = () => (globalThis.LiteGraph?.WIDGET_TEXT_COLOR ?? "#ddd");
 const BG_COLOR = () => (globalThis.LiteGraph?.WIDGET_BGCOLOR ?? "#222");
@@ -186,6 +187,35 @@ export function drawRemoveIcon(ctx, rightX, y, h) {
     ctx.restore();
 
     return [startX, REMOVE_WIDTH];
+}
+
+/**
+ * A ▲ / ▼ button starting at `x`. `direction` is -1 for up, 1 for down.
+ * Returns [startX, width].
+ */
+export function drawArrow(ctx, x, y, h, direction, disabled) {
+    const centerX = x + ARROW_WIDTH * 0.5;
+    const centerY = y + h * 0.5;
+    const size = Math.max(3, h * 0.18);
+
+    ctx.save();
+    ctx.globalAlpha *= disabled ? 0.25 : 1;
+    ctx.fillStyle = TEXT_COLOR();
+    ctx.beginPath();
+    if (direction < 0) {
+        ctx.moveTo(centerX, centerY - size);
+        ctx.lineTo(centerX + size, centerY + size);
+        ctx.lineTo(centerX - size, centerY + size);
+    } else {
+        ctx.moveTo(centerX, centerY + size);
+        ctx.lineTo(centerX + size, centerY - size);
+        ctx.lineTo(centerX - size, centerY - size);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    return [x, ARROW_WIDTH];
 }
 
 /** A full-width button face with centred label. Returns [startX, width]. */

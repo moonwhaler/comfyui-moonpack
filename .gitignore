@@ -3,3 +3,4 @@ __pycache__
 .claude
 docs/superpowers
 **/superpowers
+.superpowers/

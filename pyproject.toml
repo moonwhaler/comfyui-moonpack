@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-moonpack"
 description = "Utility nodes for ComfyUI: dynamic concat/stack, smart resolutions, dimension helpers, regex tools, fast bypassers, VACE looper schedules."
-version = "0.2.0"
+version = "0.3.0"
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"

@@ -40,6 +40,10 @@ from .moonlora_loader_node import (
     NODE_CLASS_MAPPINGS as mll_class_mappings,
     NODE_DISPLAY_NAME_MAPPINGS as mll_display_mappings,
 )
+from .text_builder_node import (
+    NODE_CLASS_MAPPINGS as tb_class_mappings,
+    NODE_DISPLAY_NAME_MAPPINGS as tb_display_mappings,
+)
 from . import server_routes  # noqa: F401 - registers /moonpack/* HTTP routes
 
 log = logging.getLogger("MoonPack")
@@ -55,6 +59,7 @@ NODE_CLASS_MAPPINGS = {
     **cb_class_mappings,
     **csi_class_mappings,
     **mll_class_mappings,
+    **tb_class_mappings,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -68,6 +73,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **cb_display_mappings,
     **csi_display_mappings,
     **mll_display_mappings,
+    **tb_display_mappings,
 }
 
 # Legacy aliases keep workflows saved with v0.1 keys loadable. Remove in 1.0.

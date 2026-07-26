@@ -147,6 +147,8 @@ multiline textarea with its own control strip.
 - **Reorder** — `▲` / `▼` on the strip, or Move Up / Move Down in the block's
   right-click menu. Output order is the order the blocks appear in, not the
   order they were created.
+- **Right-click a block** — Toggle, Move Up, Move Down and Remove, the same
+  actions as the strip's own buttons.
 - **`text` input** — optional. When connected it is always the first part and
   cannot be reordered.
 - **Joining** — parts are joined with `separator` verbatim (default `,`, so

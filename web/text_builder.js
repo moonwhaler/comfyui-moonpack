@@ -19,6 +19,7 @@ import {
     drawRemoveIcon,
     drawRowBox,
     drawToggle,
+    fitString,
 } from "./lib/canvas_draw.js";
 
 const NODE_TYPE = "MoonPack_TextBuilder";
@@ -192,7 +193,7 @@ class ButtonWidget extends BaseWidget {
 /* Block control strip                                                        */
 /* -------------------------------------------------------------------------- */
 
-const DEFAULT_ENTRY = { on: true };
+const DEFAULT_ENTRY = { on: true, label: "" };
 
 class EntryControlWidget extends BaseWidget {
     constructor(name) {
@@ -227,7 +228,32 @@ class EntryControlWidget extends BaseWidget {
                     node.moonRemoveEntry(this);
                 },
             },
+            // Declared last so the narrower controls above win the hit test.
+            label: {
+                bounds: [0, 0, 0, 0],
+                onClick(event, pos, node) {
+                    this.promptLabel(event, node);
+                },
+            },
         };
+    }
+
+    /** The strip's caption: the position, plus the user's own name for it. */
+    captionFor(position) {
+        const label = String(this.value.label ?? "").trim();
+        return label ? `#${position + 1}  ${label}` : `#${position + 1}`;
+    }
+
+    promptLabel(event, node) {
+        app.canvas.prompt(
+            "Block name",
+            this.value.label ?? "",
+            (entered) => {
+                this.value.label = String(entered ?? "");
+                node.setDirtyCanvas(true, true);
+            },
+            event,
+        );
     }
 
     draw(ctx, node, width, posY, height) {
@@ -252,12 +278,15 @@ class EntryControlWidget extends BaseWidget {
         const entries = node.moonEntries();
         const position = entries.indexOf(this);
 
-        ctx.globalAlpha = (app.canvas.editor_alpha ?? 1) * (this.value.on ? 1 : 0.4);
+        const baseAlpha = (app.canvas.editor_alpha ?? 1) * (this.value.on ? 1 : 0.4);
+        ctx.globalAlpha = baseAlpha;
         ctx.fillStyle = LiteGraph.WIDGET_TEXT_COLOR;
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
-        ctx.fillText(`#${position + 1}`, posX, posY + height * 0.5);
 
+        // The right-hand controls are laid out first: the caption gets whatever
+        // horizontal space is left, so a long name truncates instead of
+        // colliding with the arrows.
         let rightX = boxX + boxW - INNER;
         const [removeX, removeW] = drawRemoveIcon(ctx, rightX, posY, height);
         this.hitAreas.remove.bounds = [removeX, 0, removeW, height];
@@ -271,11 +300,21 @@ class EntryControlWidget extends BaseWidget {
         drawArrow(ctx, upX, posY, height, -1, position <= 0);
         this.hitAreas.moveUp.bounds = [upX, 0, ARROW_WIDTH, height];
 
+        const captionWidth = Math.max(0, upX - INNER - posX);
+        ctx.globalAlpha = baseAlpha * (String(this.value.label ?? "").trim() ? 1 : 0.6);
+        ctx.fillText(
+            fitString(ctx, this.captionFor(position), captionWidth),
+            posX,
+            posY + height * 0.5,
+        );
+        this.hitAreas.label.bounds = [posX, 0, captionWidth, height];
+
         ctx.restore();
     }
 
     serializeValue() {
-        return { on: !!this.value.on };
+        // `label` is purely cosmetic; the backend reads only `on`.
+        return { on: !!this.value.on, label: String(this.value.label ?? "") };
     }
 }
 
@@ -416,7 +455,11 @@ function setupTextBuilder(nodeType) {
         for (const value of values) {
             if (value && typeof value === "object" && !Array.isArray(value) && "on" in value) {
                 pending = this.moonAddEntry("");
-                pending.value = { on: value.on !== false };
+                pending.value = {
+                    on: value.on !== false,
+                    // Blocks saved before labels existed restore without one.
+                    label: typeof value.label === "string" ? value.label : "",
+                };
             } else if (pending && typeof value === "string") {
                 pending.textWidget.value = value;
                 pending = null;
@@ -459,6 +502,10 @@ function setupTextBuilder(nodeType) {
                         ctl.value.on = !ctl.value.on;
                         node.setDirtyCanvas(true, false);
                     },
+                },
+                {
+                    content: "✏️ Rename",
+                    callback: () => ctl.promptLabel(lastPointerEvent, node),
                 },
                 null,
                 {

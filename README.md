@@ -144,6 +144,9 @@ multiline textarea with its own control strip.
 - **Toggle** — a disabled block keeps its text but contributes nothing, so
   prompt fragments can be A/B'd without deleting them. `Toggle All` flips every
   block at once.
+- **Name a block** — click its `#1` caption (or pick Rename from the block's
+  right-click menu) to label it, e.g. `#2  lighting`. Names are cosmetic; they
+  never reach the output.
 - **Reorder** — `▲` / `▼` on the strip, or Move Up / Move Down in the block's
   right-click menu. Output order is the order the blocks appear in, not the
   order they were created.

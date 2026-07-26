@@ -425,6 +425,62 @@ function setupTextBuilder(nodeType) {
 
         this.moonResize();
     };
+
+    // Right-clicking a block: LiteGraph asks for the "slot" under the cursor
+    // first, so claim the control strip there and answer with our own menu.
+    const getSlotInPosition = nodeType.prototype.getSlotInPosition;
+    nodeType.prototype.getSlotInPosition = function (canvasX, canvasY) {
+        const slot = getSlotInPosition?.apply(this, arguments);
+        if (slot) return slot;
+        const localY = canvasY - this.pos[1];
+        for (const ctl of this.moonEntries()) {
+            if (ctl.last_y == null) continue;
+            if (localY >= ctl.last_y && localY <= ctl.last_y + lineHeight()) {
+                return { widget: ctl, output: { type: "TEXT BLOCK" } };
+            }
+        }
+        return slot;
+    };
+
+    const getSlotMenuOptions = nodeType.prototype.getSlotMenuOptions;
+    nodeType.prototype.getSlotMenuOptions = function (slot) {
+        const ctl = slot?.widget;
+        if (!ctl?._isMoonEntry) return getSlotMenuOptions?.apply(this, arguments);
+
+        const node = this;
+        const entries = this.moonEntries();
+        const position = entries.indexOf(ctl);
+
+        new LiteGraph.ContextMenu(
+            [
+                {
+                    content: `${ctl.value.on ? "⚫" : "🟢"} Toggle ${ctl.value.on ? "Off" : "On"}`,
+                    callback: () => {
+                        ctl.value.on = !ctl.value.on;
+                        node.setDirtyCanvas(true, false);
+                    },
+                },
+                null,
+                {
+                    content: "⬆️ Move Up",
+                    disabled: position <= 0,
+                    callback: () => node.moonMoveEntry(ctl, -1),
+                },
+                {
+                    content: "⬇️ Move Down",
+                    disabled: position === -1 || position >= entries.length - 1,
+                    callback: () => node.moonMoveEntry(ctl, 1),
+                },
+                null,
+                {
+                    content: "🗑️ Remove",
+                    callback: () => node.moonRemoveEntry(ctl),
+                },
+            ],
+            { title: "TEXT BLOCK", event: lastPointerEvent },
+        );
+        return undefined;
+    };
 }
 
 

@@ -45,6 +45,7 @@ All nodes are under the **MoonPack/** category in the Add Node menu.
 | **Regex Extract** | Returns the first or all regex matches. If the pattern has a capture group, returns the group; otherwise the whole match. `all_matches=True` emits each match as a separate `OUTPUT_IS_LIST` item. |
 | **Dynamic String Concat** | Auto-expanding string concatenator. Has `template` mode (`{1}, {2}` placeholders), `prefix`/`suffix`, optional whitespace stripping, and an `ignore_empty` toggle. |
 | **String Switch** | Routes one of up to 8 string inputs based on a 1-based selector. **Lazy:** only the chosen branch's upstream nodes are evaluated. |
+| **Text Builder** | Joins any number of multiline text blocks typed on the node. Blocks are added, toggled, reordered (`▲`/`▼`) and removed on the node. A connected `text` input is always the first part. |
 
 ### MoonPack/lora
 
@@ -134,6 +135,25 @@ trigger words from the output.
 Everything is local. There is no Civitai lookup and no trigger-word scraping;
 the text is whatever you type, stored in the workflow.
 
+### Text Builder — prompt fragments as a stack
+
+`Dynamic String Concat` joins strings arriving over links. **Text Builder** owns
+its text instead: press **➕ Add Text** for a block, and each block is a real
+multiline textarea with its own control strip.
+
+- **Toggle** — a disabled block keeps its text but contributes nothing, so
+  prompt fragments can be A/B'd without deleting them. `Toggle All` flips every
+  block at once.
+- **Reorder** — `▲` / `▼` on the strip, or Move Up / Move Down in the block's
+  right-click menu. Output order is the order the blocks appear in, not the
+  order they were created.
+- **`text` input** — optional. When connected it is always the first part and
+  cannot be reordered.
+- **Joining** — parts are joined with `separator` verbatim (default `,`, so
+  `a,b`; use `, ` for a space). `strip_whitespace` trims each part and
+  `skip_empty` drops the ones that end up empty, including the link input, so
+  no stray separators appear.
+
 ### Conditional Bypasser
 Routes any value through when `enabled` is true; when false, returns an
 `ExecutionBlocker`, preventing downstream nodes from executing entirely. Useful
@@ -148,6 +168,7 @@ for graph-driven branching that depends on upstream conditions.
 pytest tests/
 
 # Frontend widgets (MoonLoRA Loader) — needs Node, no dependencies
+# Text Builder's frontend has no headless checks; verify it in ComfyUI.
 node tests/js/run.mjs
 ```
 

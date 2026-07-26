@@ -393,6 +393,38 @@ function setupTextBuilder(nodeType) {
         this.moonAddEntry("");
         this.moonResize();
     };
+
+    // Overriding configure (not onConfigure) so the custom widgets are gone
+    // while LiteGraph restores widgets_values by index - otherwise the native
+    // `separator` widget at index 0 would be handed a control-strip object.
+    const configure = nodeType.prototype.configure;
+    nodeType.prototype.configure = function (info) {
+        // Drops the starter block onNodeCreated just added, too.
+        this.moonRemoveDynamicWidgets();
+        configure?.apply(this, arguments);
+
+        this.moonAddChrome();
+        this._entryCounter = 0;
+
+        let values = info?.widgets_values ?? [];
+        if (!Array.isArray(values)) values = Object.values(values);
+
+        // Saved order is: separator, skip_empty, strip_whitespace, then one
+        // {on} object per block, each followed by its text. The declared three
+        // are never objects, so they fall through without a hardcoded offset.
+        let pending = null;
+        for (const value of values) {
+            if (value && typeof value === "object" && !Array.isArray(value) && "on" in value) {
+                pending = this.moonAddEntry("");
+                pending.value = { on: value.on !== false };
+            } else if (pending && typeof value === "string") {
+                pending.textWidget.value = value;
+                pending = null;
+            }
+        }
+
+        this.moonResize();
+    };
 }
 
 

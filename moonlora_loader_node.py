@@ -105,7 +105,10 @@ class MoonLoraLoader:
                 }),
             },
             # Rows arrive as undeclared 'lora_N' inputs from the frontend widgets.
-            "optional": FlexibleOptionalInputType(any_type, data={"clip": ("CLIP",)}),
+            "optional": FlexibleOptionalInputType(any_type, data={
+                "clip": ("CLIP",),
+                "trigger_text": ("STRING", {"forceInput": True}),
+            }),
         }
 
     RETURN_TYPES = ("MODEL", "CLIP", "STRING")
@@ -113,10 +116,13 @@ class MoonLoraLoader:
     FUNCTION = "load_loras"
     CATEGORY = "MoonPack/lora"
 
-    def load_loras(self, model, separator=". ", clip=None, **kwargs):
+    def load_loras(self, model, separator=". ", clip=None, trigger_text=None, **kwargs):
         rows = iter_lora_rows(kwargs)
+        applied = []
+        if isinstance(trigger_text, str):
+            applied.append({"on": True, "text": trigger_text})
         if not rows:
-            return (model, clip, "")
+            return (model, clip, join_trigger_texts(applied, separator))
 
         # Imported here so the module stays importable outside ComfyUI.
         import folder_paths
@@ -124,7 +130,6 @@ class MoonLoraLoader:
 
         available = folder_paths.get_filename_list("loras")
         loader = LoraLoader()
-        applied = []
         warned_missing_clip = False
 
         for key, row in rows:

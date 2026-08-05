@@ -377,6 +377,33 @@ def test_conditional_bypasser_blocks_when_disabled():
     assert out is None or type(out).__name__ == "ExecutionBlocker"
 
 
+# --- MoonLoraLoader trigger_text input --------------------------------------
+
+def test_moonlora_loader_trigger_text_prepended_with_no_rows():
+    from moonlora_loader_node import MoonLoraLoader
+    n = MoonLoraLoader()
+    model, clip, text = n.load_loras(
+        "MODEL_STUB", separator=", ", clip="CLIP_STUB", trigger_text="  chained text  ",
+    )
+    assert model == "MODEL_STUB"
+    assert clip == "CLIP_STUB"
+    assert text == "chained text"
+
+
+def test_moonlora_loader_no_rows_no_trigger_text_returns_empty():
+    from moonlora_loader_node import MoonLoraLoader
+    n = MoonLoraLoader()
+    _model, _clip, text = n.load_loras("MODEL_STUB", separator=", ")
+    assert text == ""
+
+
+def test_moonlora_loader_whitespace_trigger_text_is_dropped():
+    from moonlora_loader_node import MoonLoraLoader
+    n = MoonLoraLoader()
+    _model, _clip, text = n.load_loras("MODEL_STUB", separator=", ", trigger_text="   ")
+    assert text == ""
+
+
 # --- Module-level smoke tests -----------------------------------------------
 
 def test_all_modules_export_mappings():

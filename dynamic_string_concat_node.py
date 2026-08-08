@@ -42,6 +42,10 @@ class DynamicStringConcat:
                     "default": True,
                     "tooltip": "Strip leading/trailing whitespace from each input before joining.",
                 }),
+                "newline_between_inputs": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Join inputs with a linefeed (\\n) instead of 'separator' (join mode only).",
+                }),
                 "prefix": ("STRING", {
                     "default": "", "multiline": False,
                     "tooltip": "Prepended to the final result.",
@@ -66,7 +70,7 @@ class DynamicStringConcat:
     OUTPUT_NODE = False
 
     def concatenate(self, separator=" ", ignore_empty=True, strip_whitespace=True,
-                    prefix="", suffix="", template="", **kwargs):
+                    newline_between_inputs=False, prefix="", suffix="", template="", **kwargs):
         slots = {}
         for key, value in kwargs.items():
             if not key.startswith("input_"):
@@ -89,7 +93,8 @@ class DynamicStringConcat:
             ordered = [slots[k] for k in sorted(slots.keys())]
             if ignore_empty:
                 ordered = [s for s in ordered if s]
-            body = separator.join(ordered)
+            join_char = "\n" if newline_between_inputs else separator
+            body = join_char.join(ordered)
 
         result = f"{prefix}{body}{suffix}"
         log.debug("DynamicStringConcat: %d slots → %d chars", len(slots), len(result))

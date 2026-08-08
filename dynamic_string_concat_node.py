@@ -46,6 +46,12 @@ class DynamicStringConcat:
                     "default": False,
                     "tooltip": "Join inputs with a linefeed (\\n) instead of 'separator' (join mode only).",
                 }),
+                "newline_wrapped_separator": ("STRING", {
+                    "default": "", "multiline": False,
+                    "tooltip": "Advanced. If non-empty, joins inputs as LF + this text + LF, e.g. "
+                                "'(input) LF (text) LF (input)'. Takes precedence over "
+                                "'newline_between_inputs' and 'separator' (join mode only).",
+                }),
                 "prefix": ("STRING", {
                     "default": "", "multiline": False,
                     "tooltip": "Prepended to the final result.",
@@ -70,7 +76,8 @@ class DynamicStringConcat:
     OUTPUT_NODE = False
 
     def concatenate(self, separator=" ", ignore_empty=True, strip_whitespace=True,
-                    newline_between_inputs=False, prefix="", suffix="", template="", **kwargs):
+                    newline_between_inputs=False, newline_wrapped_separator="",
+                    prefix="", suffix="", template="", **kwargs):
         slots = {}
         for key, value in kwargs.items():
             if not key.startswith("input_"):
@@ -93,7 +100,12 @@ class DynamicStringConcat:
             ordered = [slots[k] for k in sorted(slots.keys())]
             if ignore_empty:
                 ordered = [s for s in ordered if s]
-            join_char = "\n" if newline_between_inputs else separator
+            if newline_wrapped_separator:
+                join_char = f"\n{newline_wrapped_separator}\n"
+            elif newline_between_inputs:
+                join_char = "\n"
+            else:
+                join_char = separator
             body = join_char.join(ordered)
 
         result = f"{prefix}{body}{suffix}"

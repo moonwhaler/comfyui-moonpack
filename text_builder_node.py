@@ -49,9 +49,14 @@ def iter_entries(kwargs: dict) -> list:
     return entries
 
 
-def join_parts(parts, separator, skip_empty=True, strip_whitespace=True) -> str:
+def join_parts(parts, separator, skip_empty=True, strip_whitespace=True,
+                newline_between_inputs=False, newline_wrapped_separator="") -> str:
     """Joins parts with the separator verbatim, after optional strip/skip."""
     sep = "" if separator is None else str(separator)
+    if newline_wrapped_separator:
+        sep = f"\n{newline_wrapped_separator}\n"
+    elif newline_between_inputs:
+        sep = "\n"
     kept = []
     for part in parts:
         if strip_whitespace:
@@ -88,6 +93,16 @@ class TextBuilder:
                     "default": True,
                     "tooltip": "Strip leading/trailing whitespace from each part before joining.",
                 }),
+                "newline_between_inputs": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Join parts with a linefeed (\\n) instead of 'separator'.",
+                }),
+                "newline_wrapped_separator": ("STRING", {
+                    "default": "", "multiline": False,
+                    "tooltip": "Advanced. If non-empty, joins parts as LF + this text + LF, e.g. "
+                                "'(part) LF (text) LF (part)'. Takes precedence over "
+                                "'newline_between_inputs' and 'separator'.",
+                }),
             },
             # Blocks arrive as undeclared 'ctl_N'/'entry_N' inputs from the frontend widgets.
             "optional": FlexibleOptionalInputType(
@@ -100,7 +115,9 @@ class TextBuilder:
     FUNCTION = "build"
     CATEGORY = "MoonPack/string"
 
-    def build(self, separator=",", skip_empty=True, strip_whitespace=True, text=None, **kwargs):
+    def build(self, separator=",", skip_empty=True, strip_whitespace=True,
+              newline_between_inputs=False, newline_wrapped_separator="",
+              text=None, **kwargs):
         parts = []
         if text is not None:
             parts.append(_as_text(text))
@@ -108,7 +125,8 @@ class TextBuilder:
             if on:
                 parts.append(block)
 
-        result = join_parts(parts, separator, skip_empty, strip_whitespace)
+        result = join_parts(parts, separator, skip_empty, strip_whitespace,
+                             newline_between_inputs, newline_wrapped_separator)
         log.debug("Text Builder: %d parts -> %d chars", len(parts), len(result))
         return (result,)
 

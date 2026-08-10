@@ -20,18 +20,11 @@ class ProportionalDimension:
                                   "tooltip": "Original width in pixels."}),
                 "height": ("INT", {"default": 1024, "min": 1, "max": 16384,
                                    "tooltip": "Original height in pixels."}),
-                "resize_mode": (["target_side", "megapixels"], {
-                    "default": "target_side",
-                    "tooltip": "'target_side' uses target_size/target_side below. 'megapixels' uses the megapixels field instead and ignores target_size/target_side.",
-                }),
                 "target_size": ("INT", {"default": 480, "min": 1, "max": 16384,
                                         "tooltip": "Desired size for the selected side. Only used when resize_mode is 'target_side'."}),
                 "target_side": (["shortest", "longest"], {
                     "default": "shortest",
                     "tooltip": "Which side target_size applies to. 'shortest' upscales the smaller side; 'longest' caps the larger side. Only used when resize_mode is 'target_side'.",
-                }),
-                "megapixels": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01,
-                    "tooltip": "Target total megapixels (width x height / 1e6), aspect ratio preserved. Only used when resize_mode is 'megapixels'.",
                 }),
                 "orientation": (["auto", "landscape", "portrait", "square"], {
                     "default": "auto",
@@ -46,6 +39,13 @@ class ProportionalDimension:
                 "rounding": (["nearest", "floor", "ceil"], {
                     "default": "nearest",
                     "tooltip": "How to snap to the divisor. 'floor' guarantees output ≤ ideal; 'ceil' guarantees ≥.",
+                }),
+                "resize_mode": (["target_side", "megapixels"], {
+                    "default": "target_side",
+                    "tooltip": "'target_side' uses target_size/target_side above. 'megapixels' uses the megapixels field instead and ignores target_size/target_side.",
+                }),
+                "megapixels": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01,
+                    "tooltip": "Target total megapixels (width x height / 1e6), aspect ratio preserved. Only used when resize_mode is 'megapixels'.",
                 }),
             },
             "optional": {

@@ -7,8 +7,8 @@ _ROUNDERS = {"nearest": round, "floor": math.floor, "ceil": math.ceil}
 
 class ProportionalDimension:
     DESCRIPTION = (
-        "Resizes width/height proportionally so the chosen side hits target_size, "
-        "snapping to a multiple via nearest/floor/ceil rounding."
+        "Resizes width/height proportionally, targeting either a chosen side's pixel size "
+        "or a total megapixel budget, snapping to a multiple via nearest/floor/ceil rounding."
     )
     SEARCH_ALIASES = ["resize", "aspect", "scale", "dimension"]
 
@@ -20,11 +20,18 @@ class ProportionalDimension:
                                   "tooltip": "Original width in pixels."}),
                 "height": ("INT", {"default": 1024, "min": 1, "max": 16384,
                                    "tooltip": "Original height in pixels."}),
+                "resize_mode": (["target_side", "megapixels"], {
+                    "default": "target_side",
+                    "tooltip": "'target_side' uses target_size/target_side below. 'megapixels' uses the megapixels field instead and ignores target_size/target_side.",
+                }),
                 "target_size": ("INT", {"default": 480, "min": 1, "max": 16384,
-                                        "tooltip": "Desired size for the selected side."}),
+                                        "tooltip": "Desired size for the selected side. Only used when resize_mode is 'target_side'."}),
                 "target_side": (["shortest", "longest"], {
                     "default": "shortest",
-                    "tooltip": "Which side target_size applies to. 'shortest' upscales the smaller side; 'longest' caps the larger side.",
+                    "tooltip": "Which side target_size applies to. 'shortest' upscales the smaller side; 'longest' caps the larger side. Only used when resize_mode is 'target_side'.",
+                }),
+                "megapixels": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 100.0, "step": 0.01,
+                    "tooltip": "Target total megapixels (width x height / 1e6), aspect ratio preserved. Only used when resize_mode is 'megapixels'.",
                 }),
                 "orientation": (["auto", "landscape", "portrait", "square"], {
                     "default": "auto",
@@ -53,8 +60,8 @@ class ProportionalDimension:
     FUNCTION = "calculate"
     CATEGORY = CATEGORY
 
-    def calculate(self, width, height, target_size, target_side, divisible_by,
-                  rounding="nearest", orientation="auto", from_image=None):
+    def calculate(self, width, height, resize_mode, target_size, target_side, megapixels,
+                  divisible_by, rounding="nearest", orientation="auto", from_image=None):
         if from_image is not None:
             # IMAGE shape is [B, H, W, C].
             _, h, w, _ = from_image.shape
@@ -63,8 +70,11 @@ class ProportionalDimension:
         src_w, src_h = width, height
 
         if orientation == "square":
-            new_w = float(target_size)
-            new_h = float(target_size)
+            if resize_mode == "megapixels":
+                new_w = new_h = math.sqrt(megapixels * 1_000_000)
+            else:
+                new_w = float(target_size)
+                new_h = float(target_size)
         else:
             if orientation == "landscape" and height > width:
                 width, height = height, width
@@ -72,7 +82,11 @@ class ProportionalDimension:
                 width, height = height, width
 
             aspect = width / height
-            if target_side == "shortest":
+            if resize_mode == "megapixels":
+                target_pixels = megapixels * 1_000_000
+                new_w = math.sqrt(target_pixels * aspect)
+                new_h = math.sqrt(target_pixels / aspect)
+            elif target_side == "shortest":
                 if width < height:
                     new_w = float(target_size)
                     new_h = new_w / aspect

@@ -19,12 +19,6 @@ class PromptLibrary:
                     "tooltip": "The prompt text. This is exactly what gets output.",
                 }),
             },
-            "optional": {
-                # Holds the saved entries as JSON ({name, text} objects). The
-                # frontend owns this widget entirely and hides it; it exists
-                # here only so the value round-trips through the workflow.
-                "entries_json": ("STRING", {"default": "[]"}),
-            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -32,7 +26,7 @@ class PromptLibrary:
     FUNCTION = "get_text"
     CATEGORY = "MoonPack/string"
 
-    def get_text(self, text="", entries_json="[]"):
+    def get_text(self, text=""):
         return (text,)
 
 

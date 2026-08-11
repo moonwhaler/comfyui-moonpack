@@ -3,11 +3,16 @@
  * entirely on the node, so they serialise into (and travel with) the
  * workflow file. No server-side storage, no HTTP routes.
  *
- * `text` (native multiline widget) is the output. `entries_json` (native
- * single-line widget, declared as an optional STRING input purely so its
- * value round-trips through save/load and execution) holds the saved
- * entries as JSON and is hidden - the custom `PromptRowWidget` above it
- * draws the dropdown and the +/- buttons that actually manage them.
+ * `text` (native multiline widget) is the output. Entries live in
+ * `node.properties.entries` rather than a widget: this ComfyUI build's
+ * node.serialize()/configure() write/read widget values by array position,
+ * but serialize() skips serialize:false widgets by leaving a *hole* at
+ * their index while configure() reads back with a *compacted* counter that
+ * doesn't know about the hole - so any serialize:false widget positioned
+ * before a serializable one shifts every value after it by one on the next
+ * load. Properties are serialised as a plain named field instead, sidestepping
+ * that entirely. The custom `PromptRowWidget` draws the dropdown and the
+ * +/- buttons that manage the entries.
  */
 
 import { app } from "../../scripts/app.js";
@@ -169,26 +174,16 @@ function setupPromptLibrary(nodeType) {
         return widget?.inputEl?.value ?? widget?.value ?? "";
     };
 
-    nodeType.prototype.moonEntriesWidget = function () {
-        return this.widgets?.find((w) => w.name === "entries_json");
-    };
-
-    /** Reads the hidden widget's JSON into the live `_moonEntries` array. */
+    /** Reads `properties.entries` into the live `_moonEntries` array. */
     nodeType.prototype.moonLoadEntries = function () {
-        const raw = this.moonEntriesWidget()?.value;
-        let parsed;
-        try {
-            parsed = JSON.parse(raw || "[]");
-        } catch {
-            parsed = [];
-        }
-        this._moonEntries = Array.isArray(parsed) ? parsed : [];
+        const entries = this.properties?.entries;
+        this._moonEntries = Array.isArray(entries) ? entries : [];
     };
 
-    /** Writes the live `_moonEntries` array back into the hidden widget. */
+    /** Writes the live `_moonEntries` array back into `properties.entries`. */
     nodeType.prototype.moonSaveEntries = function () {
-        const widget = this.moonEntriesWidget();
-        if (widget) widget.value = JSON.stringify(this._moonEntries);
+        if (!this.properties) this.properties = {};
+        this.properties.entries = this._moonEntries;
     };
 
     nodeType.prototype.moonOpenPicker = function (event) {
@@ -263,12 +258,11 @@ function setupPromptLibrary(nodeType) {
         this.setDirtyCanvas(true, true);
     };
 
-    /** Hides the entries_json widget completely; it's data-only. */
-    nodeType.prototype.moonHideEntriesWidget = function () {
-        const widget = this.moonEntriesWidget();
-        if (!widget) return;
-        widget.computeSize = () => [0, -4];
-        widget.draw = () => {};
+    nodeType.prototype.moonAddRowWidget = function () {
+        const row = new PromptRowWidget("moonPromptRow");
+        this.addCustomWidget(row);
+        this.widgets.splice(this.widgets.indexOf(row), 1);
+        this.widgets.unshift(row);
     };
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
@@ -276,14 +270,10 @@ function setupPromptLibrary(nodeType) {
         onNodeCreated?.apply(this, arguments);
         this.serialize_widgets = true;
         this._moonSelected = null;
+        if (!this.properties) this.properties = {};
 
-        this.moonHideEntriesWidget();
         this.moonLoadEntries();
-
-        const row = new PromptRowWidget("moonPromptRow");
-        this.addCustomWidget(row);
-        this.widgets.splice(this.widgets.indexOf(row), 1);
-        this.widgets.unshift(row);
+        this.moonAddRowWidget();
 
         // Prefer a direct DOM listener over wrapping widget.callback: it fires
         // on every keystroke regardless of how this ComfyUI build's widget
@@ -303,23 +293,18 @@ function setupPromptLibrary(nodeType) {
         this.setDirtyCanvas(true, true);
     };
 
-    // Overriding configure (not onConfigure) so the custom row widget is gone
-    // while LiteGraph restores widgets_values by index - otherwise the native
-    // `text`/`entries_json` widgets at indexes 0/1 would be handed the row's
-    // (nonexistent) value.
+    // NOT removing the row widget here (unlike similar MoonPack nodes): this
+    // node.configure() writes/reads widgets_values by array position keyed
+    // off each widget's own `.serialize` flag, and the row widget never sets
+    // that flag (only the ineffective `options.serialize`), so it quietly
+    // consumes slot 0 on both save and load, keeping `text` correctly
+    // aligned at slot 1. Removing the row before calling through would only
+    // consume slot 0 on the load side, shifting `text` onto the wrong value.
     const configure = nodeType.prototype.configure;
     nodeType.prototype.configure = function (info) {
-        this.widgets = (this.widgets || []).filter((w) => w.name !== "moonPromptRow");
         configure?.apply(this, arguments);
-
-        this.moonHideEntriesWidget();
         this.moonLoadEntries();
         this._moonSelected = null;
-
-        const row = new PromptRowWidget("moonPromptRow");
-        this.addCustomWidget(row);
-        this.widgets.splice(this.widgets.indexOf(row), 1);
-        this.widgets.unshift(row);
     };
 }
 

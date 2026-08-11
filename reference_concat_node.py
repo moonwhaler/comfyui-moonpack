@@ -100,39 +100,6 @@ class ReferenceConcat:
             _, rh, rw, _ = reference_images[i:i + 1].shape
             ratios.append((rw / rh) if axis == "row" else (rh / rw))
 
-        natural_total_length = sum(ratios) * nominal_thickness
-        fill_scale = target_length / natural_total_length
-        final_thickness = max(1, round(nominal_thickness * fill_scale))
-
-        # Resize each reference to the final thickness, tracking rounding so the tiles
-        # sum to exactly target_length.
-        lengths = [max(1, round(final_thickness * ratio)) for ratio in ratios]
-
-        lengths[-1] += target_length - sum(lengths)
-        lengths[-1] = max(1, lengths[-1])
-
-        tiles = []
-        for i in range(reference_images.shape[0]):
-            ref = reference_images[i:i + 1]
-            _, rh, rw, rc = ref.shape
-            if rc != channels:
-                ref = ref[..., :channels] if rc > channels else F.pad(ref, (0, channels - rc))
-            length = lengths[i]
-            if axis == "row":
-                tiles.append(_resize(ref, final_thickness, length))
-            else:
-                tiles.append(_resize(ref, length, final_thickness))
-
-        strip = torch.cat(tiles, dim=2 if axis == "row" else 1)
-        # Rounding can leave the strip a pixel or two short/long of target_length; force it exact.
-        if axis == "row" and strip.shape[2] != target_length:
-            strip = _resize(strip, final_thickness, target_length)
-        elif axis == "column" and strip.shape[1] != target_length:
-            strip = _resize(strip, target_length, final_thickness)
-
-        max_offset = min(final_thickness, main_cross)
-        clamped_offset = min(offset, max_offset)
-
         if fill == "edge_average":
             edge_side = ("top" if axis == "row" else "left") if before else ("bottom" if axis == "row" else "right")
             if edge_side == "top":
@@ -147,6 +114,44 @@ class ReferenceConcat:
             fill_rgb = torch.tensor(_FILL_PRESETS[fill], device=device, dtype=dtype)
             if channels != 3:
                 fill_rgb = fill_rgb.mean().expand(channels)
+
+        # ref_scale sets the nominal thickness directly. target_length is a cap, not a
+        # forced fit: only scale down (never stretch) if the natural strip would overflow it.
+        natural_total_length = sum(ratios) * nominal_thickness
+        if natural_total_length > target_length:
+            final_thickness = max(1, round(nominal_thickness * (target_length / natural_total_length)))
+        else:
+            final_thickness = nominal_thickness
+
+        lengths = [max(1, round(final_thickness * ratio)) for ratio in ratios]
+        strip_length = sum(lengths)
+        if strip_length > target_length:
+            # Rounding pushed a couple pixels past the cap; trim the last tile back to it.
+            lengths[-1] = max(1, lengths[-1] - (strip_length - target_length))
+            strip_length = sum(lengths)
+
+        tiles = []
+        for i in range(reference_images.shape[0]):
+            ref = reference_images[i:i + 1]
+            _, rh, rw, rc = ref.shape
+            if rc != channels:
+                ref = ref[..., :channels] if rc > channels else F.pad(ref, (0, channels - rc))
+            length = lengths[i]
+            if axis == "row":
+                tiles.append(_resize(ref, final_thickness, length))
+            else:
+                tiles.append(_resize(ref, length, final_thickness))
+
+        strip = torch.cat(tiles, dim=2 if axis == "row" else 1)
+
+        pad = target_length - strip_length
+        if pad > 0:
+            pad_shape = (1, final_thickness, pad, channels) if axis == "row" else (1, pad, final_thickness, channels)
+            pad_tile = fill_rgb.view(1, 1, 1, channels).expand(pad_shape).clone()
+            strip = torch.cat([strip, pad_tile], dim=2 if axis == "row" else 1)
+
+        max_offset = min(final_thickness, main_cross)
+        clamped_offset = min(offset, max_offset)
 
         if axis == "row":
             canvas_h = main_h + final_thickness - clamped_offset

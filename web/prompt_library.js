@@ -2,187 +2,89 @@
  * Prompt Library - a managed multiline text box backed by a shared,
  * server-side JSON library (see prompt_library_routes.py).
  *
- * The node's native `text` widget IS the output; `entry_name` is a hidden
- * native widget that just remembers which library entry is loaded, so
- * reopening the workflow shows the right picker label. Everything else
- * (description, tags) lives server-side and is fetched fresh when needed.
+ * Uses only native LiteGraph widgets (combo + buttons) - no hand-drawn canvas
+ * UI. The `text` widget is the output; `prompt` (a combo) just remembers
+ * which library entry is loaded. Editing the text auto-saves to that entry
+ * after a short pause; there is no separate "update" step.
  */
 
 import { app } from "../../scripts/app.js";
-import { drawButton } from "./lib/canvas_draw.js";
 import {
-    clearPromptCache,
     createPromptEntry,
     deletePromptEntry,
     fetchPromptEntries,
-    showPromptChooser,
-    showPromptEditDialog,
     updatePromptEntry,
-} from "./lib/prompt_chooser.js";
+} from "./lib/prompt_library_api.js";
 
 const NODE_TYPE = "MoonPack_PromptLibrary";
-const MARGIN = 10;
-
-const lineHeight = () => LiteGraph.NODE_WIDGET_HEIGHT;
+const AUTOSAVE_DELAY_MS = 600;
 
 let lastPointerEvent = null;
 document.addEventListener("pointerdown", (e) => (lastPointerEvent = e), true);
 
-/** A full-width clickable button row; fires `onPress` on pointer-up inside it. */
-class ClickWidget {
-    constructor(name, getLabel, onPress) {
-        this.name = name;
-        this.type = "custom";
-        this.value = null;
-        this.options = { serialize: false };
-        this.getLabel = getLabel;
-        this.onPress = onPress;
-        this._bounds = [0, 0, 0, 0];
-        this._down = false;
-        // Not part of INPUT_TYPES: must be stripped before LiteGraph's default
-        // configure() restores widgets_values by raw index, and re-added after.
-        this._moonExtra = true;
-    }
-
-    computeSize(width) {
-        return [width, lineHeight() + 4];
-    }
-
-    draw(ctx, node, width, posY, height) {
-        const x = MARGIN;
-        const w = node.size[0] - MARGIN * 2;
-        drawButton(ctx, x, posY + 2, w, height - 4, this.getLabel(node));
-        this._bounds = [x, posY + 2, w, height - 4];
-    }
-
-    _hit(pos) {
-        const localY = pos[1] - (this.last_y ?? 0);
-        const [x, y, w, h] = this._bounds;
-        return pos[0] >= x && pos[0] <= x + w && localY >= y && localY <= y + h;
-    }
-
-    mouse(event, pos, node) {
-        const type = String(event?.type || "");
-        if (type.endsWith("down")) {
-            this._down = this._hit(pos);
-            return this._down;
-        }
-        if (type.endsWith("up")) {
-            const wasDown = this._down;
-            this._down = false;
-            if (wasDown && this._hit(pos)) this.onPress(event, node);
-            return wasDown;
-        }
-        return false;
-    }
-}
-
-/** Hides a native widget from layout/drawing while keeping it serialized. */
-function hideWidget(widget) {
-    widget.computeSize = () => [0, -4];
-    widget.draw = () => {};
-}
-
-/** Inserts the picker before `text` and appends the action buttons at the end. */
-function addExtraWidgets(node) {
-    const picker = new ClickWidget(
-        "moonPicker",
-        (n) => n.moonEntryName() || "📋 Pick a Saved Prompt…",
-        (event, n) => n.moonOpenChooser(event ?? lastPointerEvent),
-    );
-    const textIndex = node.widgets.findIndex((w) => w.name === "text");
-    node.widgets.splice(textIndex === -1 ? 0 : textIndex, 0, picker);
-
-    node.widgets.push(
-        new ClickWidget("moonSaveAsNew", () => "💾 Save as New",
-            (event, n) => n.moonSaveAsNew()),
-        new ClickWidget("moonUpdateSelected", () => "✏️ Update Selected",
-            (event, n) => n.moonUpdateSelected()),
-        new ClickWidget("moonDeleteSelected", () => "🗑️ Delete Selected",
-            (event, n) => n.moonDeleteSelected()),
-    );
-}
-
 function setupPromptLibrary(nodeType) {
-    nodeType.prototype.moonEntryName = function () {
-        const widget = this.widgets?.find((w) => w.name === "entry_name");
-        return widget ? String(widget.value ?? "") : "";
-    };
-
-    nodeType.prototype.moonSetEntryName = function (name) {
-        const widget = this.widgets?.find((w) => w.name === "entry_name");
-        if (widget) widget.value = name;
-    };
-
     nodeType.prototype.moonTextWidget = function () {
         return this.widgets?.find((w) => w.name === "text");
     };
 
-    nodeType.prototype.moonOpenChooser = function (event) {
-        fetchPromptEntries().then((entries) => {
-            showPromptChooser(event, entries, (entry) => {
-                this.moonTextWidget().value = entry.text ?? "";
-                this.moonSetEntryName(entry.name ?? "");
-                this.setDirtyCanvas(true, true);
-            });
+    nodeType.prototype.moonComboWidget = function () {
+        return this.widgets?.find((w) => w.name === "prompt");
+    };
+
+    /** Re-pulls the library from the server and repopulates the dropdown in place. */
+    nodeType.prototype.moonRefreshEntries = function (selectName) {
+        fetchPromptEntries(true).then((entries) => {
+            this._moonEntries = entries;
+            const combo = this.moonComboWidget();
+            if (!combo) return;
+            combo.options.values.length = 0;
+            combo.options.values.push(...entries.map((e) => e.name));
+            if (selectName !== undefined) combo.value = selectName;
+            this.setDirtyCanvas(true, true);
         });
     };
 
-    nodeType.prototype.moonSaveAsNew = function () {
-        showPromptEditDialog(
-            { title: "Save as New Prompt" },
-            ({ name, description, tags }) => {
-                if (!name) return Promise.reject(new Error("Name is required."));
-                return createPromptEntry({
-                    name, description, tags, text: this.moonTextWidget().value ?? "",
-                }).then(() => {
-                    this.moonSetEntryName(name);
-                    this.setDirtyCanvas(true, true);
-                });
+    nodeType.prototype.moonLoadEntry = function (name) {
+        const entry = (this._moonEntries || []).find((e) => e.name === name);
+        if (entry) this.moonTextWidget().value = entry.text ?? "";
+        this.setDirtyCanvas(true, true);
+    };
+
+    nodeType.prototype.moonScheduleAutosave = function () {
+        const name = this.moonComboWidget()?.value;
+        if (!name) return;
+        clearTimeout(this._moonSaveTimer);
+        this._moonSaveTimer = setTimeout(() => {
+            updatePromptEntry(name, { text: this.moonTextWidget().value ?? "" }).catch((err) => {
+                console.error("[MoonPack] Prompt Library autosave failed:", err);
+            });
+        }, AUTOSAVE_DELAY_MS);
+    };
+
+    nodeType.prototype.moonNewPrompt = function () {
+        app.canvas.prompt(
+            "New prompt name",
+            "",
+            (entered) => {
+                const name = String(entered ?? "").trim();
+                if (!name) return;
+                createPromptEntry({ name, text: this.moonTextWidget().value ?? "" })
+                    .then(() => this.moonRefreshEntries(name))
+                    .catch((err) => alert(err?.message || String(err)));
             },
+            lastPointerEvent,
         );
     };
 
-    nodeType.prototype.moonUpdateSelected = function () {
-        const name = this.moonEntryName();
+    nodeType.prototype.moonDeletePrompt = function () {
+        const name = this.moonComboWidget()?.value;
         if (!name) {
-            alert("No prompt is loaded. Use 'Save as New' first.");
-            return;
-        }
-        fetchPromptEntries(true).then((entries) => {
-            const entry = entries.find((e) => e.name === name);
-            if (!entry) {
-                alert(`'${name}' no longer exists in the library. Use 'Save as New' instead.`);
-                return;
-            }
-            showPromptEditDialog(
-                {
-                    title: "Update Prompt",
-                    name: entry.name,
-                    description: entry.description,
-                    tags: entry.tags,
-                    lockName: true,
-                },
-                ({ description, tags }) =>
-                    updatePromptEntry(name, {
-                        description, tags, text: this.moonTextWidget().value ?? "",
-                    }),
-            );
-        });
-    };
-
-    nodeType.prototype.moonDeleteSelected = function () {
-        const name = this.moonEntryName();
-        if (!name) {
-            alert("No prompt is loaded.");
+            alert("No prompt is selected.");
             return;
         }
         if (!confirm(`Delete '${name}' from the prompt library? This cannot be undone.`)) return;
         deletePromptEntry(name)
-            .then(() => {
-                this.moonSetEntryName("");
-                this.setDirtyCanvas(true, true);
-            })
+            .then(() => this.moonRefreshEntries(""))
             .catch((err) => alert(err?.message || String(err)));
     };
 
@@ -190,26 +92,26 @@ function setupPromptLibrary(nodeType) {
     nodeType.prototype.onNodeCreated = function () {
         onNodeCreated?.apply(this, arguments);
         this.serialize_widgets = true;
+        this._moonEntries = [];
 
-        const entryNameWidget = this.widgets?.find((w) => w.name === "entry_name");
-        if (entryNameWidget) hideWidget(entryNameWidget);
+        const combo = this.addWidget("combo", "prompt", "", (name) => this.moonLoadEntry(name), {
+            values: [],
+        });
+        this.widgets.splice(this.widgets.indexOf(combo), 1);
+        this.widgets.unshift(combo);
 
-        addExtraWidgets(this);
+        this.addWidget("button", "New Prompt", null, () => this.moonNewPrompt());
+        this.addWidget("button", "Delete Prompt", null, () => this.moonDeletePrompt());
 
-        clearPromptCache();
-        this.computeSize();
-        this.setDirtyCanvas(true, true);
-    };
+        const textWidget = this.moonTextWidget();
+        const originalCallback = textWidget.callback;
+        const node = this;
+        textWidget.callback = function (...args) {
+            originalCallback?.apply(this, args);
+            node.moonScheduleAutosave();
+        };
 
-    // Default configure() restores widgets_values onto this.widgets by raw
-    // index; the picker/button widgets aren't in that saved array, so they
-    // must be pulled out first and reinserted after the real values land.
-    const configure = nodeType.prototype.configure;
-    nodeType.prototype.configure = function (info) {
-        this.widgets = (this.widgets || []).filter((w) => !w._moonExtra);
-        configure?.apply(this, arguments);
-        addExtraWidgets(this);
-        this.computeSize();
+        this.moonRefreshEntries();
         this.setDirtyCanvas(true, true);
     };
 }

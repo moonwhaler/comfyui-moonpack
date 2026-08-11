@@ -28,10 +28,7 @@ def _register():
         if not name:
             return web.json_response({"error": "Name is required."}, status=400)
         try:
-            entries = store.add_entry(
-                name, str(body.get("description", "")), str(body.get("tags", "")),
-                str(body.get("text", "")),
-            )
+            entries = store.add_entry(name, str(body.get("text", "")))
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         return web.json_response({"entries": entries})
@@ -40,10 +37,7 @@ def _register():
     async def moonpack_update_prompt(request):
         body = await request.json()
         try:
-            entries = store.update_entry(
-                request.match_info["name"], str(body.get("description", "")),
-                str(body.get("tags", "")), str(body.get("text", "")),
-            )
+            entries = store.update_entry(request.match_info["name"], str(body.get("text", "")))
         except KeyError as exc:
             return web.json_response({"error": str(exc)}, status=404)
         return web.json_response({"entries": entries})

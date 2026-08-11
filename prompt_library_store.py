@@ -47,27 +47,22 @@ def find_entry(entries: list, name: str):
     return None
 
 
-def add_entry(name: str, description: str, tags: str, text: str) -> list:
+def add_entry(name: str, text: str) -> list:
     """Appends a new entry. Raises ValueError if the name is already taken."""
     entries = load_library()
     if find_entry(entries, name) is not None:
         raise ValueError(f"An entry named '{name}' already exists.")
-    entries.append({"name": name, "description": description, "tags": tags, "text": text})
+    entries.append({"name": name, "text": text})
     save_library(entries)
     return entries
 
 
-def update_entry(name: str, description: str, tags: str, text: str) -> list:
-    """Updates description/tags/text of an existing entry. The name stays fixed.
-
-    Raises KeyError if no entry with that name exists.
-    """
+def update_entry(name: str, text: str) -> list:
+    """Updates an existing entry's text. Raises KeyError if the name doesn't exist."""
     entries = load_library()
     entry = find_entry(entries, name)
     if entry is None:
         raise KeyError(f"No entry named '{name}' exists.")
-    entry["description"] = description
-    entry["tags"] = tags
     entry["text"] = text
     save_library(entries)
     return entries

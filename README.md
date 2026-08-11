@@ -35,7 +35,7 @@ All nodes are under the **MoonPack/** category in the Add Node menu.
 | **Proportional Dimension** | Resize W/H to a target side while preserving aspect; snap to a divisor with nearest/floor/ceil rounding; optional `from_image` input. Outputs `width, height, shortest_side, longest_side, scale`. |
 | **Dimension From Image** | Reads `width, height, batch_size` from an `IMAGE` tensor. |
 | **Smart Resolution** | Picks a model-friendly resolution near a megapixel budget while preserving aspect ratio. Presets for SD 1.5, SDXL, Flux (1.0/1.4 MP), and Wan 480p/720p. |
-| **Reference Concat** | Concatenates a batch of reference images into a strip against a main image (e.g. identity refs for a video first frame). Strip goes on the main image's longest side, auto-sized to exactly match that side's length (no resolution cap), main image never shrunk. `offset` slides the strip into the main image (overlap) or away from it (filled gap). Outputs a `MASK` marking the strip area. |
+| **Reference Concat** | Concatenates a batch of reference images into a strip against a main image (e.g. identity refs for a video first frame). Strip goes on the main image's longest side, capped to that side's length (never stretched beyond it), main image never shrunk. `offset` slides the strip into the main image (overlap) or away from it (filled gap). If `main_image` is left unconnected, outputs an auto-sized contact-sheet grid of just the reference images instead. Outputs a `MASK` marking the reference area. |
 
 ### MoonPack/string
 

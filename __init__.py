@@ -44,7 +44,12 @@ from .text_builder_node import (
     NODE_CLASS_MAPPINGS as tb_class_mappings,
     NODE_DISPLAY_NAME_MAPPINGS as tb_display_mappings,
 )
+from .prompt_library_node import (
+    NODE_CLASS_MAPPINGS as pl_class_mappings,
+    NODE_DISPLAY_NAME_MAPPINGS as pl_display_mappings,
+)
 from . import server_routes  # noqa: F401 - registers /moonpack/* HTTP routes
+from . import prompt_library_routes  # noqa: F401 - registers /moonpack/prompt_library routes
 
 log = logging.getLogger("MoonPack")
 
@@ -60,6 +65,7 @@ NODE_CLASS_MAPPINGS = {
     **csi_class_mappings,
     **mll_class_mappings,
     **tb_class_mappings,
+    **pl_class_mappings,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -74,6 +80,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **csi_display_mappings,
     **mll_display_mappings,
     **tb_display_mappings,
+    **pl_display_mappings,
 }
 
 # Legacy aliases keep workflows saved with v0.1 keys loadable. Remove in 1.0.

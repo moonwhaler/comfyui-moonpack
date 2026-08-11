@@ -57,7 +57,6 @@ from .image_list_node import (
     NODE_DISPLAY_NAME_MAPPINGS as il_display_mappings,
 )
 from . import server_routes  # noqa: F401 - registers /moonpack/* HTTP routes
-from . import prompt_library_routes  # noqa: F401 - registers /moonpack/prompt_library routes
 
 log = logging.getLogger("MoonPack")
 

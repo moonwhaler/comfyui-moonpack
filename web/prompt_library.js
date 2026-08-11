@@ -1,26 +1,158 @@
 /**
- * Prompt Library - a managed multiline text box backed by a shared,
- * server-side JSON library (see prompt_library_routes.py).
+ * Prompt Library - a managed multiline text box with saved entries that live
+ * entirely on the node, so they serialise into (and travel with) the
+ * workflow file. No server-side storage, no HTTP routes.
  *
- * Uses only native LiteGraph widgets (combo + buttons) - no hand-drawn canvas
- * UI. The `text` widget is the output; `prompt` (a combo) just remembers
- * which library entry is loaded. Editing the text auto-saves to that entry
- * after a short pause; there is no separate "update" step.
+ * `text` (native multiline widget) is the output. `entries_json` (native
+ * single-line widget, declared as an optional STRING input purely so its
+ * value round-trips through save/load and execution) holds the saved
+ * entries as JSON and is hidden - the custom `PromptRowWidget` above it
+ * draws the dropdown and the +/- buttons that actually manage them.
  */
 
 import { app } from "../../scripts/app.js";
-import {
-    createPromptEntry,
-    deletePromptEntry,
-    fetchPromptEntries,
-    updatePromptEntry,
-} from "./lib/prompt_library_api.js";
+import { ARROW_WIDTH, drawArrow, drawButton, drawRowBox, fitString } from "./lib/canvas_draw.js";
 
 const NODE_TYPE = "MoonPack_PromptLibrary";
 const AUTOSAVE_DELAY_MS = 600;
+const MARGIN = 10;
+const BUTTON_WIDTH = 20;
+const GAP = 4;
 
+const lineHeight = () => LiteGraph.NODE_WIDGET_HEIGHT;
+
+// LiteGraph does not hand the originating event to app.canvas.prompt calls
+// triggered from a custom widget's onClick, so keep the last pointer event
+// around to anchor menus/prompts on.
 let lastPointerEvent = null;
 document.addEventListener("pointerdown", (e) => (lastPointerEvent = e), true);
+
+/**
+ * Shared plumbing for canvas widgets: rectangular hit areas in widget-local
+ * coordinates, and click-vs-drag discrimination. Duplicated in outline from
+ * web/moonlora_loader.js and web/text_builder.js; if a fourth node needs it,
+ * it moves to web/lib/.
+ */
+class BaseWidget {
+    constructor(name) {
+        this.name = name;
+        this.type = "custom";
+        this.options = { serialize: false };
+        this.hitAreas = {};
+        this._active = null;
+    }
+
+    computeSize(width) {
+        return [width, lineHeight()];
+    }
+
+    clearBounds() {
+        for (const key of Object.keys(this.hitAreas)) {
+            this.hitAreas[key].bounds = [0, 0, 0, 0];
+        }
+    }
+
+    hitTest(pos) {
+        const localY = pos[1] - (this.last_y ?? 0);
+        for (const key of Object.keys(this.hitAreas)) {
+            const area = this.hitAreas[key];
+            const [x, y, w, h] = area.bounds;
+            if (w <= 0 || h <= 0) continue;
+            if (pos[0] >= x && pos[0] <= x + w && localY >= y && localY <= y + h) {
+                return area;
+            }
+        }
+        return null;
+    }
+
+    mouse(event, pos, node) {
+        const type = String(event?.type || "");
+        if (type.endsWith("down")) {
+            this._active = this.hitTest(pos);
+            if (!this._active) return false;
+            this._active.onDown?.call(this, event, pos, node);
+            return true;
+        }
+        if (type.endsWith("up")) {
+            const active = this._active;
+            this._active = null;
+            if (!active) return false;
+            active.onClick?.call(this, event, pos, node);
+            return true;
+        }
+        return false;
+    }
+}
+
+/** The dropdown + +/- row that manages the saved entries. */
+class PromptRowWidget extends BaseWidget {
+    constructor(name) {
+        super(name);
+        this.hitAreas = {
+            select: {
+                bounds: [0, 0, 0, 0],
+                onClick(event, pos, node) {
+                    node.moonOpenPicker(event);
+                },
+            },
+            add: {
+                bounds: [0, 0, 0, 0],
+                onClick(event, pos, node) {
+                    node.moonNewPrompt(event);
+                },
+            },
+            remove: {
+                bounds: [0, 0, 0, 0],
+                onClick(event, pos, node) {
+                    node.moonDeletePrompt();
+                },
+            },
+        };
+    }
+
+    draw(ctx, node, width, posY, height) {
+        this.clearBounds();
+
+        const boxX = MARGIN;
+        const rightEdge = node.size[0] - MARGIN;
+
+        ctx.save();
+
+        let x = rightEdge - BUTTON_WIDTH;
+        drawButton(ctx, x, posY, BUTTON_WIDTH, height, "−");
+        this.hitAreas.remove.bounds = [x, 0, BUTTON_WIDTH, height];
+        x -= BUTTON_WIDTH + GAP;
+
+        drawButton(ctx, x, posY, BUTTON_WIDTH, height, "+");
+        this.hitAreas.add.bounds = [x, 0, BUTTON_WIDTH, height];
+        x -= GAP;
+
+        const selectW = Math.max(0, x - boxX);
+        this._drawSelect(ctx, node, boxX, posY, selectW, height);
+        this.hitAreas.select.bounds = [boxX, 0, selectW, height];
+
+        ctx.restore();
+    }
+
+    _drawSelect(ctx, node, x, y, w, h) {
+        drawRowBox(ctx, x, y, w, h);
+
+        const label = node._moonSelected || "Select a prompt…";
+        const textX = x + 8;
+        const caretX = x + w - GAP - ARROW_WIDTH;
+        const maxTextWidth = Math.max(0, caretX - textX - GAP);
+
+        ctx.save();
+        ctx.fillStyle = LiteGraph.WIDGET_TEXT_COLOR;
+        ctx.globalAlpha = node._moonSelected ? 1 : 0.6;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(fitString(ctx, label, maxTextWidth), textX, y + h * 0.5);
+        ctx.restore();
+
+        drawArrow(ctx, caretX, y, h, 1, !node._moonEntries?.length);
+    }
+}
 
 function setupPromptLibrary(nodeType) {
     nodeType.prototype.moonTextWidget = function () {
@@ -37,88 +169,110 @@ function setupPromptLibrary(nodeType) {
         return widget?.inputEl?.value ?? widget?.value ?? "";
     };
 
-    nodeType.prototype.moonComboWidget = function () {
-        return this.widgets?.find((w) => w.name === "prompt");
+    nodeType.prototype.moonEntriesWidget = function () {
+        return this.widgets?.find((w) => w.name === "entries_json");
     };
 
-    /** Re-pulls the library from the server and repopulates the dropdown in place. */
-    nodeType.prototype.moonRefreshEntries = function (selectName) {
-        fetchPromptEntries(true).then((entries) => {
-            this._moonEntries = entries;
-            const combo = this.moonComboWidget();
-            if (!combo) return;
-            combo.options.values.length = 0;
-            combo.options.values.push(...entries.map((e) => e.name));
-            if (selectName !== undefined) combo.value = selectName;
-            this.setDirtyCanvas(true, true);
+    /** Reads the hidden widget's JSON into the live `_moonEntries` array. */
+    nodeType.prototype.moonLoadEntries = function () {
+        const raw = this.moonEntriesWidget()?.value;
+        let parsed;
+        try {
+            parsed = JSON.parse(raw || "[]");
+        } catch {
+            parsed = [];
+        }
+        this._moonEntries = Array.isArray(parsed) ? parsed : [];
+    };
+
+    /** Writes the live `_moonEntries` array back into the hidden widget. */
+    nodeType.prototype.moonSaveEntries = function () {
+        const widget = this.moonEntriesWidget();
+        if (widget) widget.value = JSON.stringify(this._moonEntries);
+    };
+
+    nodeType.prototype.moonOpenPicker = function (event) {
+        const names = this._moonEntries.map((e) => e.name);
+        if (!names.length) return;
+        new LiteGraph.ContextMenu(names, {
+            event: event || lastPointerEvent,
+            callback: (name) => this.moonSelectEntry(name),
         });
     };
 
-    /**
-     * Reads the combo's own `.value` rather than trusting the callback argument:
-     * some LiteGraph/ComfyUI builds don't reliably pass the clicked value through
-     * to combo callbacks, while `.value` itself is always kept correct by the
-     * framework (same defensive pattern rgthree-comfy uses for its combos).
-     */
-    nodeType.prototype.moonLoadEntry = function () {
-        const name = this.moonComboWidget()?.value;
-        const entry = (this._moonEntries || []).find((e) => e.name === name);
-        if (entry) this.moonTextWidget().value = entry.text ?? "";
+    nodeType.prototype.moonSelectEntry = function (name) {
+        const entry = this._moonEntries.find((e) => e.name === name);
+        if (!entry) return;
+        this._moonSelected = name;
+        this.moonTextWidget().value = entry.text ?? "";
         this.setDirtyCanvas(true, true);
     };
 
     nodeType.prototype.moonScheduleAutosave = function () {
-        const name = this.moonComboWidget()?.value;
-        if (!name) return;
+        if (!this._moonSelected) return;
         clearTimeout(this._moonSaveTimer);
         this._moonSaveTimer = setTimeout(() => {
-            updatePromptEntry(name, { text: this.moonCurrentText() }).catch((err) => {
-                console.error("[MoonPack] Prompt Library autosave failed:", err);
-            });
+            const entry = this._moonEntries.find((e) => e.name === this._moonSelected);
+            if (!entry) return;
+            entry.text = this.moonCurrentText();
+            this.moonSaveEntries();
         }, AUTOSAVE_DELAY_MS);
     };
 
-    nodeType.prototype.moonNewPrompt = function () {
+    nodeType.prototype.moonNewPrompt = function (event) {
         app.canvas.prompt(
             "New prompt name",
             "",
             (entered) => {
                 const name = String(entered ?? "").trim();
                 if (!name) return;
-                createPromptEntry({ name, text: this.moonCurrentText() })
-                    .then(() => this.moonRefreshEntries(name))
-                    .catch((err) => alert(err?.message || String(err)));
+                if (this._moonEntries.some((e) => e.name === name)) {
+                    alert(`An entry named '${name}' already exists.`);
+                    return;
+                }
+                this._moonEntries.push({ name, text: this.moonCurrentText() });
+                this.moonSaveEntries();
+                this._moonSelected = name;
+                this.setDirtyCanvas(true, true);
             },
-            lastPointerEvent,
+            event || lastPointerEvent,
         );
     };
 
     nodeType.prototype.moonDeletePrompt = function () {
-        const name = this.moonComboWidget()?.value;
+        const name = this._moonSelected;
         if (!name) {
             alert("No prompt is selected.");
             return;
         }
         if (!confirm(`Delete '${name}' from the prompt library? This cannot be undone.`)) return;
-        deletePromptEntry(name)
-            .then(() => this.moonRefreshEntries(""))
-            .catch((err) => alert(err?.message || String(err)));
+        this._moonEntries = this._moonEntries.filter((e) => e.name !== name);
+        this._moonSelected = null;
+        this.moonSaveEntries();
+        this.setDirtyCanvas(true, true);
+    };
+
+    /** Hides the entries_json widget completely; it's data-only. */
+    nodeType.prototype.moonHideEntriesWidget = function () {
+        const widget = this.moonEntriesWidget();
+        if (!widget) return;
+        widget.computeSize = () => [0, -4];
+        widget.draw = () => {};
     };
 
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
         onNodeCreated?.apply(this, arguments);
         this.serialize_widgets = true;
-        this._moonEntries = [];
+        this._moonSelected = null;
 
-        const combo = this.addWidget("combo", "prompt", "", () => this.moonLoadEntry(), {
-            values: [],
-        });
-        this.widgets.splice(this.widgets.indexOf(combo), 1);
-        this.widgets.unshift(combo);
+        this.moonHideEntriesWidget();
+        this.moonLoadEntries();
 
-        this.addWidget("button", "New Prompt", null, () => this.moonNewPrompt());
-        this.addWidget("button", "Delete Prompt", null, () => this.moonDeletePrompt());
+        const row = new PromptRowWidget("moonPromptRow");
+        this.addCustomWidget(row);
+        this.widgets.splice(this.widgets.indexOf(row), 1);
+        this.widgets.unshift(row);
 
         // Prefer a direct DOM listener over wrapping widget.callback: it fires
         // on every keystroke regardless of how this ComfyUI build's widget
@@ -135,8 +289,26 @@ function setupPromptLibrary(nodeType) {
             };
         }
 
-        this.moonRefreshEntries();
         this.setDirtyCanvas(true, true);
+    };
+
+    // Overriding configure (not onConfigure) so the custom row widget is gone
+    // while LiteGraph restores widgets_values by index - otherwise the native
+    // `text`/`entries_json` widgets at indexes 0/1 would be handed the row's
+    // (nonexistent) value.
+    const configure = nodeType.prototype.configure;
+    nodeType.prototype.configure = function (info) {
+        this.widgets = (this.widgets || []).filter((w) => w.name !== "moonPromptRow");
+        configure?.apply(this, arguments);
+
+        this.moonHideEntriesWidget();
+        this.moonLoadEntries();
+        this._moonSelected = null;
+
+        const row = new PromptRowWidget("moonPromptRow");
+        this.addCustomWidget(row);
+        this.widgets.splice(this.widgets.indexOf(row), 1);
+        this.widgets.unshift(row);
     };
 }
 

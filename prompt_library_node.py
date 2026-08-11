@@ -2,9 +2,10 @@ class PromptLibrary:
     """A managed text box: pick a saved prompt from the dropdown, or add/delete one."""
 
     DESCRIPTION = (
-        "A multiline text box that doubles as a shared prompt library. Pick a saved "
+        "A multiline text box that doubles as a prompt library. Pick a saved "
         "prompt from the dropdown to load it, edit it in place (auto-saved), or use "
-        "the New/Delete buttons to add or remove entries. The STRING output is "
+        "the +/- buttons to add or remove entries. Entries are stored on the node "
+        "itself, so they travel with the workflow file. The STRING output is "
         "always whatever is currently in the text box."
     )
     SEARCH_ALIASES = ["prompt", "library", "preset", "text", "multiline"]
@@ -18,6 +19,12 @@ class PromptLibrary:
                     "tooltip": "The prompt text. This is exactly what gets output.",
                 }),
             },
+            "optional": {
+                # Holds the saved entries as JSON ({name, text} objects). The
+                # frontend owns this widget entirely and hides it; it exists
+                # here only so the value round-trips through the workflow.
+                "entries_json": ("STRING", {"default": "[]"}),
+            },
         }
 
     RETURN_TYPES = ("STRING",)
@@ -25,7 +32,7 @@ class PromptLibrary:
     FUNCTION = "get_text"
     CATEGORY = "MoonPack/string"
 
-    def get_text(self, text=""):
+    def get_text(self, text="", entries_json="[]"):
         return (text,)
 
 

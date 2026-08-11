@@ -1,7 +1,9 @@
 import math
 
+import numpy as np
 import torch
 import torch.nn.functional as F
+from PIL import Image as PILImage
 
 CATEGORY = "MoonPack/image"
 
@@ -11,29 +13,61 @@ _FILL_PRESETS = {
     "gray": (0.5, 0.5, 0.5),
 }
 
+_TORCH_MODES = ("nearest", "bilinear", "bicubic")
 
-def _resize(img, height, width):
+
+def _resize(img, height, width, mode="bicubic"):
     # img: [1, H, W, C] -> resize to [1, height, width, C]
+    _, h, w, c = img.shape
+    if h == height and w == width:
+        return img.clamp(0.0, 1.0)
+    if mode == "lanczos" and c == 3:
+        return _resize_lanczos(img, height, width)
+    torch_mode = mode if mode in _TORCH_MODES else "bicubic"
     t = img.permute(0, 3, 1, 2)
-    t = F.interpolate(t, size=(height, width), mode="bilinear", align_corners=False)
+    kwargs = {} if torch_mode == "nearest" else {"align_corners": False}
+    t = F.interpolate(t, size=(height, width), mode=torch_mode, **kwargs)
     return t.clamp(0.0, 1.0).permute(0, 2, 3, 1)
 
 
-def _cover_fit(img, height, width):
+def _resize_lanczos(img, height, width):
+    arr = (img[0].clamp(0.0, 1.0).cpu().numpy() * 255.0).round().astype(np.uint8)
+    resized = PILImage.fromarray(arr, mode="RGB").resize((width, height), PILImage.LANCZOS)
+    out = torch.from_numpy(np.array(resized)).to(dtype=img.dtype) / 255.0
+    return out.unsqueeze(0).to(img.device)
+
+
+def _cover_fit(img, height, width, mode="bicubic"):
     # Scale img to cover a height x width cell, then center-crop the overflow.
     _, h, w, _ = img.shape
     scale = max(height / h, width / w)
-    resized = _resize(img, max(1, round(h * scale)), max(1, round(w * scale)))
+    resized = _resize(img, max(1, round(h * scale)), max(1, round(w * scale)), mode)
     _, rh, rw, _ = resized.shape
     top = (rh - height) // 2
     left = (rw - width) // 2
     return resized[:, top:top + height, left:left + width, :]
 
 
-def _median(values):
-    s = sorted(values)
-    mid = len(s) // 2
-    return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
+def _match_channels(img, channels):
+    c = img.shape[-1]
+    if c == channels:
+        return img
+    return img[..., :channels] if c > channels else F.pad(img, (0, channels - c))
+
+
+def _normalize_refs(raw):
+    """Flattens whatever arrives for reference_images (a native list of per-image tensors from
+    Image List, or a single legacy stacked-batch tensor) into a flat list of [1,H,W,C] tensors,
+    each keeping its native resolution."""
+    flat = []
+    if raw is None:
+        return flat
+    for item in raw:
+        if item is None:
+            continue
+        for i in range(item.shape[0]):
+            flat.append(item[i:i + 1])
+    return flat
 
 
 class ReferenceConcat:
@@ -44,16 +78,23 @@ class ReferenceConcat:
         "side's length (no resolution cap), and the main image is never shrunk. 'offset' "
         "slides the strip further into the main image (overlap) or further outside it (gap). "
         "If main_image is left unconnected, outputs a contact-sheet grid of just the "
-        "reference images instead (side/ref_scale/offset are ignored in that mode)."
+        "reference images instead (side/ref_scale/offset are ignored in that mode). "
+        "Accepts either a MoonPack Image List (keeps each reference's native resolution) or "
+        "a plain stacked IMAGE batch."
     )
     SEARCH_ALIASES = ["concat", "reference", "identity", "first frame", "kjnodes", "video", "contact sheet"]
+    INPUT_IS_LIST = True
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "reference_images": ("IMAGE", {
-                    "tooltip": "Batch of reference images to concatenate as an identity strip.",
+                    "tooltip": (
+                        "Reference images to concatenate. Connect a MoonPack Image List to keep each "
+                        "image's native resolution (recommended for mixed-resolution references), or a "
+                        "plain stacked IMAGE batch."
+                    ),
                 }),
                 "side": (["top", "bottom", "left", "right"], {
                     "default": "top",
@@ -88,6 +129,13 @@ class ReferenceConcat:
                         "is unconnected."
                     ),
                 }),
+                "interpolation": (["nearest", "bilinear", "bicubic", "lanczos"], {
+                    "default": "bicubic",
+                    "tooltip": (
+                        "Resampling filter used whenever a reference image is resized, including "
+                        "upscaling references smaller than the target size."
+                    ),
+                }),
                 "invert_mask": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Flip the output mask (main-image/empty-cell area becomes 1.0 instead of the reference area).",
@@ -108,17 +156,26 @@ class ReferenceConcat:
     FUNCTION = "concat"
     CATEGORY = CATEGORY
 
-    def concat(self, reference_images, side, ref_scale, offset, fill, invert_mask, main_image=None):
-        if main_image is None:
-            if reference_images is None or reference_images.shape[0] == 0:
-                raise ValueError("ReferenceConcat: connect main_image, reference_images, or both.")
-            return self._build_sheet(reference_images, fill, invert_mask)
+    def concat(self, reference_images, side, ref_scale, offset, fill, interpolation, invert_mask, main_image=None):
+        side = side[0]
+        ref_scale = ref_scale[0]
+        offset = offset[0]
+        fill = fill[0]
+        interpolation = interpolation[0]
+        invert_mask = invert_mask[0]
+        main = main_image[0][:1] if main_image is not None else None
 
-        main = main_image[:1]
+        refs = _normalize_refs(reference_images)
+
+        if main is None:
+            if not refs:
+                raise ValueError("ReferenceConcat: connect main_image, reference_images, or both.")
+            return self._build_sheet(refs, fill, interpolation, invert_mask)
+
         _, main_h, main_w, channels = main.shape
         device, dtype = main.device, main.dtype
 
-        if reference_images is None or reference_images.shape[0] == 0:
+        if not refs:
             mask = torch.zeros((1, main_h, main_w), device=device, dtype=dtype)
             if invert_mask:
                 mask = 1.0 - mask
@@ -133,8 +190,8 @@ class ReferenceConcat:
 
         # length-per-unit-thickness for each ref: width/height for a row strip, height/width for a column strip.
         ratios = []
-        for i in range(reference_images.shape[0]):
-            _, rh, rw, _ = reference_images[i:i + 1].shape
+        for ref in refs:
+            _, rh, rw, _ = ref.shape
             ratios.append((rw / rh) if axis == "row" else (rh / rw))
 
         if fill == "edge_average":
@@ -168,16 +225,12 @@ class ReferenceConcat:
             strip_length = sum(lengths)
 
         tiles = []
-        for i in range(reference_images.shape[0]):
-            ref = reference_images[i:i + 1]
-            _, rh, rw, rc = ref.shape
-            if rc != channels:
-                ref = ref[..., :channels] if rc > channels else F.pad(ref, (0, channels - rc))
-            length = lengths[i]
+        for ref, length in zip(refs, lengths):
+            ref = _match_channels(ref, channels)
             if axis == "row":
-                tiles.append(_resize(ref, final_thickness, length))
+                tiles.append(_resize(ref, final_thickness, length, interpolation))
             else:
-                tiles.append(_resize(ref, length, final_thickness))
+                tiles.append(_resize(ref, length, final_thickness, interpolation))
 
         strip = torch.cat(tiles, dim=2 if axis == "row" else 1)
 
@@ -222,17 +275,20 @@ class ReferenceConcat:
 
         return (canvas, mask)
 
-    def _build_sheet(self, reference_images, fill, invert_mask):
-        n, _, _, channels = reference_images.shape
-        device, dtype = reference_images.device, reference_images.dtype
+    def _build_sheet(self, refs, fill, interpolation, invert_mask):
+        n = len(refs)
+        channels = refs[0].shape[-1]
+        device, dtype = refs[0].device, refs[0].dtype
 
         cols = max(1, math.ceil(math.sqrt(n)))
         rows = math.ceil(n / cols)
-        cell_h = max(1, round(_median([reference_images[i].shape[0] for i in range(n)])))
-        cell_w = max(1, round(_median([reference_images[i].shape[1] for i in range(n)])))
+        # The largest reference sets the cell size, so smaller ones get upscaled up to
+        # match instead of the smallest one capping every tile's resolution.
+        cell_h = max(ref.shape[1] for ref in refs)
+        cell_w = max(ref.shape[2] for ref in refs)
 
         if fill == "edge_average":
-            fill_rgb = reference_images.reshape(-1, channels).mean(dim=0)
+            fill_rgb = torch.cat([ref.reshape(-1, ref.shape[-1]) for ref in refs], dim=0).mean(dim=0)
         else:
             fill_rgb = torch.tensor(_FILL_PRESETS[fill], device=device, dtype=dtype)
             if channels != 3:
@@ -242,9 +298,9 @@ class ReferenceConcat:
         canvas = fill_rgb.view(1, 1, 1, channels).expand(1, canvas_h, canvas_w, channels).clone()
         mask = torch.zeros((1, canvas_h, canvas_w), device=device, dtype=dtype)
 
-        for i in range(n):
+        for i, ref in enumerate(refs):
             r, c = divmod(i, cols)
-            tile = _cover_fit(reference_images[i:i + 1], cell_h, cell_w)
+            tile = _cover_fit(_match_channels(ref, channels), cell_h, cell_w, interpolation)
             y, x = r * cell_h, c * cell_w
             canvas[:, y:y + cell_h, x:x + cell_w, :] = tile
             mask[:, y:y + cell_h, x:x + cell_w] = 1.0

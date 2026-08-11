@@ -9,6 +9,7 @@ const DYNAMIC_INPUT_NODES = {
     "MoonPack_DynamicLoraStack":     { prefix: "lora_",  type: "WANVIDLORA" },
     "DynamicStringConcat":           { prefix: "input_", type: "STRING"     },
     "MoonPack_DynamicStringConcat":  { prefix: "input_", type: "STRING"     },
+    "MoonPack_ImageList":            { prefix: "image_", type: "IMAGE"      },
 };
 const FAST_BYPASSER_NODES = new Set(["FastNodeBypasser", "MoonPack_FastNodeBypasser"]);
 

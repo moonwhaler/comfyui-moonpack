@@ -55,10 +55,11 @@ def _match_channels(img, channels):
     return img[..., :channels] if c > channels else F.pad(img, (0, channels - c))
 
 
-def _normalize_refs(raw):
+def _normalize_refs(raw, max_side, mode):
     """Flattens whatever arrives for reference_images (a native list of per-image tensors from
     Image List, or a single legacy stacked-batch tensor) into a flat list of [1,H,W,C] tensors,
-    each keeping its native resolution."""
+    each keeping its native resolution (unless it exceeds max_side, in which case it's scaled
+    down, never up, so one huge outlier can't blow up the grid/strip size)."""
     flat = []
     if raw is None:
         return flat
@@ -66,7 +67,14 @@ def _normalize_refs(raw):
         if item is None:
             continue
         for i in range(item.shape[0]):
-            flat.append(item[i:i + 1])
+            img = item[i:i + 1]
+            if max_side > 0:
+                _, h, w, _ = img.shape
+                longest = max(h, w)
+                if longest > max_side:
+                    scale = max_side / longest
+                    img = _resize(img, max(1, round(h * scale)), max(1, round(w * scale)), mode)
+            flat.append(img)
     return flat
 
 
@@ -136,6 +144,14 @@ class ReferenceConcat:
                         "upscaling references smaller than the target size."
                     ),
                 }),
+                "max_ref_side": ("INT", {
+                    "default": 0, "min": 0, "max": 8192, "step": 1,
+                    "tooltip": (
+                        "Caps each reference's longest side to this many pixels before any other "
+                        "processing (downscale only, never upscales). Keeps one oversized reference "
+                        "from blowing up the contact-sheet or strip size. 0 = no cap."
+                    ),
+                }),
                 "invert_mask": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Flip the output mask (main-image/empty-cell area becomes 1.0 instead of the reference area).",
@@ -156,16 +172,18 @@ class ReferenceConcat:
     FUNCTION = "concat"
     CATEGORY = CATEGORY
 
-    def concat(self, reference_images, side, ref_scale, offset, fill, interpolation, invert_mask, main_image=None):
+    def concat(self, reference_images, side, ref_scale, offset, fill, interpolation, max_ref_side,
+               invert_mask, main_image=None):
         side = side[0]
         ref_scale = ref_scale[0]
         offset = offset[0]
         fill = fill[0]
         interpolation = interpolation[0]
+        max_ref_side = max_ref_side[0]
         invert_mask = invert_mask[0]
         main = main_image[0][:1] if main_image is not None else None
 
-        refs = _normalize_refs(reference_images)
+        refs = _normalize_refs(reference_images, max_ref_side, interpolation)
 
         if main is None:
             if not refs:

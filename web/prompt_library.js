@@ -195,7 +195,12 @@ function setupPromptLibrary(nodeType) {
         const names = this._moonEntries.map((e) => e.name);
         if (!names.length) return;
         new LiteGraph.ContextMenu(names, {
-            event: event || lastPointerEvent,
+            // The event this widget's mouse() handler forwards isn't always a
+            // real PointerEvent/MouseEvent instance; ContextMenu silently
+            // discards anything else and falls back to positioning at (0,0),
+            // which reads as "nothing happened". lastPointerEvent is captured
+            // straight off the document, so it always passes that check.
+            event: lastPointerEvent || event,
             callback: (name) => this.moonSelectEntry(name),
         });
     };
@@ -204,7 +209,13 @@ function setupPromptLibrary(nodeType) {
         const entry = this._moonEntries.find((e) => e.name === name);
         if (!entry) return;
         this._moonSelected = name;
-        this.moonTextWidget().value = entry.text ?? "";
+        const text = entry.text ?? "";
+        const widget = this.moonTextWidget();
+        widget.value = text;
+        // Belt and suspenders: go straight to the DOM element too, in case
+        // this ComfyUI build's widget.value setter doesn't write through.
+        const el = widget.element ?? widget.inputEl;
+        if (el) el.value = text;
         this.setDirtyCanvas(true, true);
     };
 
@@ -235,7 +246,7 @@ function setupPromptLibrary(nodeType) {
                 this._moonSelected = name;
                 this.setDirtyCanvas(true, true);
             },
-            event || lastPointerEvent,
+            lastPointerEvent || event,
         );
     };
 

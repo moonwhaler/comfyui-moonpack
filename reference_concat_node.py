@@ -1,81 +1,14 @@
 import math
 
-import numpy as np
 import torch
-import torch.nn.functional as F
-from PIL import Image as PILImage
+
+from ._image_ops import FILL_PRESETS as _FILL_PRESETS
+from ._image_ops import cover_fit as _cover_fit
+from ._image_ops import match_channels as _match_channels
+from ._image_ops import normalize_refs as _normalize_refs
+from ._image_ops import resize as _resize
 
 CATEGORY = "MoonPack/image"
-
-_FILL_PRESETS = {
-    "black": (0.0, 0.0, 0.0),
-    "white": (1.0, 1.0, 1.0),
-    "gray": (0.5, 0.5, 0.5),
-}
-
-_TORCH_MODES = ("nearest", "bilinear", "bicubic")
-
-
-def _resize(img, height, width, mode="bicubic"):
-    # img: [1, H, W, C] -> resize to [1, height, width, C]
-    _, h, w, c = img.shape
-    if h == height and w == width:
-        return img.clamp(0.0, 1.0)
-    if mode == "lanczos" and c == 3:
-        return _resize_lanczos(img, height, width)
-    torch_mode = mode if mode in _TORCH_MODES else "bicubic"
-    t = img.permute(0, 3, 1, 2)
-    kwargs = {} if torch_mode == "nearest" else {"align_corners": False}
-    t = F.interpolate(t, size=(height, width), mode=torch_mode, **kwargs)
-    return t.clamp(0.0, 1.0).permute(0, 2, 3, 1)
-
-
-def _resize_lanczos(img, height, width):
-    arr = (img[0].clamp(0.0, 1.0).cpu().numpy() * 255.0).round().astype(np.uint8)
-    resized = PILImage.fromarray(arr, mode="RGB").resize((width, height), PILImage.LANCZOS)
-    out = torch.from_numpy(np.array(resized)).to(dtype=img.dtype) / 255.0
-    return out.unsqueeze(0).to(img.device)
-
-
-def _cover_fit(img, height, width, mode="bicubic"):
-    # Scale img to cover a height x width cell, then center-crop the overflow.
-    _, h, w, _ = img.shape
-    scale = max(height / h, width / w)
-    resized = _resize(img, max(1, round(h * scale)), max(1, round(w * scale)), mode)
-    _, rh, rw, _ = resized.shape
-    top = (rh - height) // 2
-    left = (rw - width) // 2
-    return resized[:, top:top + height, left:left + width, :]
-
-
-def _match_channels(img, channels):
-    c = img.shape[-1]
-    if c == channels:
-        return img
-    return img[..., :channels] if c > channels else F.pad(img, (0, channels - c))
-
-
-def _normalize_refs(raw, max_side, mode):
-    """Flattens whatever arrives for reference_images (a native list of per-image tensors from
-    Image List, or a single legacy stacked-batch tensor) into a flat list of [1,H,W,C] tensors,
-    each keeping its native resolution (unless it exceeds max_side, in which case it's scaled
-    down, never up, so one huge outlier can't blow up the grid/strip size)."""
-    flat = []
-    if raw is None:
-        return flat
-    for item in raw:
-        if item is None:
-            continue
-        for i in range(item.shape[0]):
-            img = item[i:i + 1]
-            if max_side > 0:
-                _, h, w, _ = img.shape
-                longest = max(h, w)
-                if longest > max_side:
-                    scale = max_side / longest
-                    img = _resize(img, max(1, round(h * scale)), max(1, round(w * scale)), mode)
-            flat.append(img)
-    return flat
 
 
 class ReferenceConcat:

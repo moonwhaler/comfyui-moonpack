@@ -56,6 +56,10 @@ from .image_list_node import (
     NODE_CLASS_MAPPINGS as il_class_mappings,
     NODE_DISPLAY_NAME_MAPPINGS as il_display_mappings,
 )
+from .reference_grid_node import (
+    NODE_CLASS_MAPPINGS as rg_class_mappings,
+    NODE_DISPLAY_NAME_MAPPINGS as rg_display_mappings,
+)
 from . import server_routes  # noqa: F401 - registers /moonpack/* HTTP routes
 
 log = logging.getLogger("MoonPack")
@@ -75,6 +79,7 @@ NODE_CLASS_MAPPINGS = {
     **pl_class_mappings,
     **rc_class_mappings,
     **il_class_mappings,
+    **rg_class_mappings,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -92,6 +97,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **pl_display_mappings,
     **rc_display_mappings,
     **il_display_mappings,
+    **rg_display_mappings,
 }
 
 # Legacy aliases keep workflows saved with v0.1 keys loadable. Remove in 1.0.

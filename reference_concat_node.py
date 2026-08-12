@@ -3,7 +3,6 @@ import math
 import torch
 
 from ._image_ops import FILL_PRESETS as _FILL_PRESETS
-from ._image_ops import contain_fit as _contain_fit
 from ._image_ops import match_channels as _match_channels
 from ._image_ops import normalize_refs as _normalize_refs
 from ._image_ops import resize as _resize
@@ -227,16 +226,13 @@ class ReferenceConcat:
         return (canvas, mask)
 
     def _build_sheet(self, refs, fill, interpolation, invert_mask):
+        # Justified-row layout (the algorithm behind Flickr/Google-Photos style contact
+        # sheets): each row's images are scaled to a shared row height derived from their
+        # own aspect ratios, so a wide reference gets a wide (or standalone) row and a tall
+        # one gets a narrow row - never squeezed to match an unrelated reference's cell size.
         n = len(refs)
         channels = refs[0].shape[-1]
         device, dtype = refs[0].device, refs[0].dtype
-
-        cols = max(1, math.ceil(math.sqrt(n)))
-        rows = math.ceil(n / cols)
-        # The largest reference sets the cell size, so smaller ones get upscaled up to
-        # match instead of the smallest one capping every tile's resolution.
-        cell_h = max(ref.shape[1] for ref in refs)
-        cell_w = max(ref.shape[2] for ref in refs)
 
         if fill == "edge_average":
             fill_rgb = torch.cat([ref.reshape(-1, ref.shape[-1]) for ref in refs], dim=0).mean(dim=0)
@@ -245,16 +241,50 @@ class ReferenceConcat:
             if channels != 3:
                 fill_rgb = fill_rgb.mean().expand(channels)
 
-        canvas_h, canvas_w = rows * cell_h, cols * cell_w
+        aspects = [ref.shape[2] / ref.shape[1] for ref in refs]
+        avg_h = sum(ref.shape[1] for ref in refs) / n
+        avg_w = sum(ref.shape[2] for ref in refs) / n
+        cols = max(1, math.ceil(math.sqrt(n)))
+        # Target width of a fully justified row, and the row height below which a row is
+        # considered "full" - both derived from the references themselves, so the overall
+        # canvas stays in the same ballpark as the old sqrt(n) grid without hardcoding a size.
+        target_width = avg_w * cols
+        target_row_height = avg_h
+
+        row_groups = []
+        current, aspect_sum = [], 0.0
+        for i, a in enumerate(aspects):
+            current.append(i)
+            aspect_sum += a
+            natural_height = target_width / aspect_sum
+            if natural_height <= target_row_height:
+                row_groups.append((current, natural_height))
+                current, aspect_sum = [], 0.0
+        if current:
+            # Leftover row too sparse to fill target_width at target_row_height - use the
+            # target height directly rather than stretching it taller to force-justify.
+            row_groups.append((current, target_row_height))
+
+        rows = []
+        for group, height in row_groups:
+            row_height = max(1, round(height))
+            widths = [max(1, round(row_height * aspects[i])) for i in group]
+            rows.append((group, row_height, widths))
+
+        canvas_h = sum(row_height for _, row_height, _ in rows)
+        canvas_w = max(sum(widths) for _, _, widths in rows)
         canvas = fill_rgb.view(1, 1, 1, channels).expand(1, canvas_h, canvas_w, channels).clone()
         mask = torch.zeros((1, canvas_h, canvas_w), device=device, dtype=dtype)
 
-        for i, ref in enumerate(refs):
-            r, c = divmod(i, cols)
-            tile, top, left, ch, cw = _contain_fit(_match_channels(ref, channels), cell_h, cell_w, interpolation, fill_rgb)
-            y, x = r * cell_h, c * cell_w
-            canvas[:, y:y + cell_h, x:x + cell_w, :] = tile
-            mask[:, y + top:y + top + ch, x + left:x + left + cw] = 1.0
+        y = 0
+        for group, row_height, widths in rows:
+            x = 0
+            for i, width in zip(group, widths):
+                tile = _resize(_match_channels(refs[i], channels), row_height, width, interpolation)
+                canvas[:, y:y + row_height, x:x + width, :] = tile
+                mask[:, y:y + row_height, x:x + width] = 1.0
+                x += width
+            y += row_height
 
         if invert_mask:
             mask = 1.0 - mask

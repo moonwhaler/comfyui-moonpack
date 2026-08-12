@@ -3,7 +3,7 @@ import math
 import torch
 
 from ._image_ops import FILL_PRESETS as _FILL_PRESETS
-from ._image_ops import cover_fit as _cover_fit
+from ._image_ops import contain_fit as _contain_fit
 from ._image_ops import match_channels as _match_channels
 from ._image_ops import normalize_refs as _normalize_refs
 from ._image_ops import resize as _resize
@@ -251,10 +251,10 @@ class ReferenceConcat:
 
         for i, ref in enumerate(refs):
             r, c = divmod(i, cols)
-            tile = _cover_fit(_match_channels(ref, channels), cell_h, cell_w, interpolation)
+            tile, top, left, ch, cw = _contain_fit(_match_channels(ref, channels), cell_h, cell_w, interpolation, fill_rgb)
             y, x = r * cell_h, c * cell_w
             canvas[:, y:y + cell_h, x:x + cell_w, :] = tile
-            mask[:, y:y + cell_h, x:x + cell_w] = 1.0
+            mask[:, y + top:y + top + ch, x + left:x + left + cw] = 1.0
 
         if invert_mask:
             mask = 1.0 - mask

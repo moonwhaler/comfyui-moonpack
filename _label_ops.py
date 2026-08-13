@@ -9,9 +9,9 @@ from PIL import Image as PILImage
 from PIL import ImageDraw, ImageFont
 
 BAR_HEIGHT_RATIO = 0.08
-MIN_BAR_PX = 32
+MIN_BAR_PX = 48
 ARROW_ZONE_RATIO = 0.4
-MIN_FONT_PX = 8
+MIN_FONT_PX = 16
 TEXT_WIDTH_RATIO = 0.92
 
 

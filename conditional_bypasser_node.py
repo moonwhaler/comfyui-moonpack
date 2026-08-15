@@ -9,7 +9,8 @@ class ConditionalBypasser:
 
     DESCRIPTION = (
         "When 'enabled' is true, passes the input through unchanged. "
-        "When false, returns ExecutionBlocker so the downstream graph does not run. "
+        "When false, either blocks downstream execution entirely (ExecutionBlocker) "
+        "or passes None through, depending on 'disabled_behavior'. "
         "Accepts any data type."
     )
     SEARCH_ALIASES = ["bypass", "gate", "block", "switch", "mute", "if"]
@@ -21,7 +22,15 @@ class ConditionalBypasser:
                 "value": (any_type, {"tooltip": "Any input. Type-checked dynamically."}),
                 "enabled": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "If false, downstream execution is blocked via ExecutionBlocker.",
+                    "tooltip": "If false, behavior is controlled by 'disabled_behavior'.",
+                }),
+                "disabled_behavior": (["block", "pass_none"], {
+                    "default": "block",
+                    "tooltip": (
+                        "When disabled: 'block' stops downstream nodes from running "
+                        "(ExecutionBlocker). 'pass_none' lets downstream nodes run but "
+                        "receive None instead of the input value."
+                    ),
                 }),
             },
         }
@@ -31,9 +40,11 @@ class ConditionalBypasser:
     FUNCTION = "gate"
     CATEGORY = "MoonPack/utils"
 
-    def gate(self, value, enabled):
+    def gate(self, value, enabled, disabled_behavior="block"):
         if enabled:
             return (value,)
+        if disabled_behavior == "pass_none":
+            return (None,)
         try:
             from comfy_execution.graph import ExecutionBlocker
             return (ExecutionBlocker(None),)

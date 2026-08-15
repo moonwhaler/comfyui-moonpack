@@ -372,9 +372,16 @@ def test_conditional_bypasser_passes_when_enabled():
 def test_conditional_bypasser_blocks_when_disabled():
     from conditional_bypasser_node import ConditionalBypasser
     n = ConditionalBypasser()
-    (out,) = n.gate("payload", False)
+    (out,) = n.gate("payload", False, "block")
     # Either ExecutionBlocker (real ComfyUI) or None (fallback) — both indicate "no pass-through".
     assert out is None or type(out).__name__ == "ExecutionBlocker"
+
+
+def test_conditional_bypasser_passes_none_when_disabled_pass_none():
+    from conditional_bypasser_node import ConditionalBypasser
+    n = ConditionalBypasser()
+    (out,) = n.gate("payload", False, "pass_none")
+    assert out is None
 
 
 # --- MoonLoraLoader trigger_text input --------------------------------------

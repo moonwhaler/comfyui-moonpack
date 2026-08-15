@@ -63,7 +63,7 @@ All nodes are under the **MoonPack/** category in the Add Node menu.
 | Node | Purpose |
 |---|---|
 | **Fast Node Bypasser** | Adds a toggle widget per controlled node. Connect nodes to control them, **or** set the `matchTitle` regex property to auto-match by title. Sort by position / alphanumeric / custom alphabet. Toggle restrictions: `default` / `max one` / `always one`. Right-click for `Bypass All / Enable All / Toggle All / Refresh`. |
-| **Conditional Bypasser** | Server-side gate: passes input through when enabled, returns `ExecutionBlocker` so downstream nodes don't run when disabled. Accepts any data type. |
+| **Conditional Bypasser** | Server-side gate: passes input through when enabled. When disabled, `disabled_behavior` picks `block` (returns `ExecutionBlocker`, downstream nodes don't run — default) or `pass_none` (downstream nodes run but receive `None`). Accepts any data type. |
 
 ### MoonPack/video
 
@@ -164,8 +164,10 @@ multiline textarea with its own control strip.
   no stray separators appear.
 
 ### Conditional Bypasser
-Routes any value through when `enabled` is true; when false, returns an
-`ExecutionBlocker`, preventing downstream nodes from executing entirely. Useful
+Routes any value through when `enabled` is true. When false, `disabled_behavior`
+controls what happens: `block` (default) returns an `ExecutionBlocker`,
+preventing downstream nodes from executing entirely; `pass_none` lets
+downstream nodes run normally but receive `None` instead of the value. Useful
 for graph-driven branching that depends on upstream conditions.
 
 ---

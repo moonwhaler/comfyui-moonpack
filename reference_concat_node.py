@@ -39,10 +39,21 @@ class ReferenceConcat:
                 "side": (["top", "bottom", "left", "right"], {
                     "default": "top",
                     "tooltip": (
-                        "Which side of the main image the strip goes on. The strip's row-vs-column "
-                        "layout is auto-picked from the main image's longest side; 'top'/'left' place "
-                        "the strip before the main image along that axis, 'bottom'/'right' place it after. "
-                        "Ignored if main_image is unconnected."
+                        "Which side of the main image the strip goes on. By default the strip's "
+                        "row-vs-column layout is auto-picked from the main image's longest side, and "
+                        "'top'/'left' place the strip before the main image along that axis while "
+                        "'bottom'/'right' place it after. Enable force_side to make this side always "
+                        "win instead. Ignored if main_image is unconnected."
+                    ),
+                }),
+                "force_side": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": (
+                        "Force the strip onto the exact side chosen above, overriding the automatic "
+                        "row-vs-column pick: 'left'/'right' always stack the strip as a full-height "
+                        "column, 'top'/'bottom' always stack it as a full-width row. The resulting strip "
+                        "may end up thin if this fights the main image's orientation. Ignored if "
+                        "main_image is unconnected."
                     ),
                 }),
                 "ref_scale": ("FLOAT", {
@@ -104,9 +115,10 @@ class ReferenceConcat:
     FUNCTION = "concat"
     CATEGORY = CATEGORY
 
-    def concat(self, reference_images, side, ref_scale, offset, fill, interpolation, max_ref_side,
+    def concat(self, reference_images, side, force_side, ref_scale, offset, fill, interpolation, max_ref_side,
                invert_mask, main_image=None):
         side = side[0]
+        force_side = force_side[0]
         ref_scale = ref_scale[0]
         offset = offset[0]
         fill = fill[0]
@@ -131,7 +143,10 @@ class ReferenceConcat:
                 mask = 1.0 - mask
             return (main, mask)
 
-        axis = "row" if main_w >= main_h else "column"
+        if force_side:
+            axis = "column" if side in ("left", "right") else "row"
+        else:
+            axis = "row" if main_w >= main_h else "column"
         before = side in ("top", "left")
         main_cross = main_h if axis == "row" else main_w
         target_length = main_w if axis == "row" else main_h

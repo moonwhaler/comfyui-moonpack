@@ -1,8 +1,9 @@
-"""Compositing for the Load Image (Labeled) node.
+"""Cropping and label-bar compositing for the Load Image (Labeled) node.
 
 Shared by the node's own execution (`labeled_load_image_node.py`) and the
-`/moonpack/label_preview` HTTP route, so the editor preview is pixel-identical
-to what actually gets queued - one implementation, not two.
+`/moonpack/label_preview` and `/moonpack/crop_source` HTTP routes, so the
+editor preview is pixel-identical to what actually gets queued - one
+implementation, not two.
 """
 
 import os
@@ -112,6 +113,25 @@ def _draw_arrow(draw, center_x, zone_top, zone_h, point_down, color_rgb):
             (center_x, center_y - arrow_h / 2),
         ]
     draw.polygon(points, fill=color_rgb)
+
+
+def apply_crop(img, x, y, width, height):
+    """Crops img to (x, y, width, height) in source-pixel space. width/height
+    of 0 mean "everything remaining" in that axis. Coordinates and sizes are
+    clamped to the image bounds rather than raising, so stale widget values
+    from a previously loaded (differently sized) image degrade gracefully
+    instead of erroring out."""
+    img_w, img_h = img.size
+    x = max(0, min(x, max(0, img_w - 1)))
+    y = max(0, min(y, max(0, img_h - 1)))
+    w = width if width > 0 else img_w - x
+    h = height if height > 0 else img_h - y
+    w = max(1, min(w, img_w - x))
+    h = max(1, min(h, img_h - y))
+
+    if x == 0 and y == 0 and w == img_w and h == img_h:
+        return img
+    return img.crop((x, y, x + w, y + h))
 
 
 def compose_labeled_image(img, text, position, show_label, show_arrow,

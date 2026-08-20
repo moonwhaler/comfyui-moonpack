@@ -462,3 +462,47 @@ def test_all_node_classes_have_required_attributes():
             # FUNCTION must name an actual method.
             assert callable(getattr(cls, cls.FUNCTION, None)), \
                 f"{key} FUNCTION='{cls.FUNCTION}' is not callable on the class"
+
+
+# --- apply_crop (Load Image (Labeled)) --------------------------------------
+
+def test_apply_crop_zero_width_and_height_is_noop():
+    from PIL import Image
+    from _label_ops import apply_crop
+    img = Image.new("RGB", (100, 50))
+    cropped = apply_crop(img, 0, 0, 0, 0)
+    assert cropped is img
+    assert cropped.size == (100, 50)
+
+
+def test_apply_crop_explicit_rect():
+    from PIL import Image
+    from _label_ops import apply_crop
+    img = Image.new("RGB", (100, 50))
+    cropped = apply_crop(img, 10, 5, 30, 20)
+    assert cropped.size == (30, 20)
+
+
+def test_apply_crop_zero_width_means_rest_of_row():
+    from PIL import Image
+    from _label_ops import apply_crop
+    img = Image.new("RGB", (100, 50))
+    cropped = apply_crop(img, 20, 0, 0, 10)
+    assert cropped.size == (80, 10)
+
+
+def test_apply_crop_clamps_out_of_bounds_rect():
+    from PIL import Image
+    from _label_ops import apply_crop
+    img = Image.new("RGB", (100, 50))
+    cropped = apply_crop(img, 90, 45, 9999, 9999)
+    assert cropped.size == (10, 5)
+
+
+def test_apply_crop_clamps_origin_past_edge():
+    from PIL import Image
+    from _label_ops import apply_crop
+    img = Image.new("RGB", (100, 50))
+    # x/y clamp to the last valid pixel (99, 49), so only 1x1 remains.
+    cropped = apply_crop(img, 99999, 99999, 10, 10)
+    assert cropped.size == (1, 1)

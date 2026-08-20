@@ -6,7 +6,8 @@
  * image (via /moonpack/crop_source), and a Preview button that renders the
  * exact composited result (crop, label bar, arrow, border) via the backend's
  * /moonpack/label_preview route, so the thumbnail matches what execution
- * will actually output.
+ * will actually output. The same preview also auto-refreshes (debounced)
+ * whenever text, crop, or any other composited-look widget changes.
  */
 
 import { app } from "../../scripts/app.js";
@@ -17,8 +18,21 @@ const COLOR_WIDGETS = [
     { name: "background_color", fallback: "#000000" },
     { name: "text_color", fallback: "#ffffff" },
 ];
+const AUTO_PREVIEW_WIDGET_NAMES = [
+    "text", "text_position", "show_label", "show_arrow", "border_width",
+    "crop_x", "crop_y", "crop_width", "crop_height",
+];
+const PREVIEW_DEBOUNCE_MS = 400;
 const MIN_CROP_PX = 8;
 const HANDLE_HIT_PX = 10;
+
+function debounce(fn, ms) {
+    let timer = null;
+    return (...args) => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), ms);
+    };
+}
 
 function replaceWithColorWidget(node, name, fallback) {
     const index = node.widgets.findIndex((w) => w.name === name);
@@ -41,6 +55,7 @@ function replaceWithColorWidget(node, name, fallback) {
     input.addEventListener("input", () => {
         widget.value = input.value;
         node.setDirtyCanvas(true, true);
+        node._moonAutoPreview?.();
     });
     return widget;
 }
@@ -457,6 +472,7 @@ function showCropModal(node, img, url) {
         setWidgetValue(node, "crop_width", Math.round(rect.w));
         setWidgetValue(node, "crop_height", Math.round(rect.h));
         node.setDirtyCanvas(true, true);
+        node._moonAutoPreview?.();
         close();
     });
 
@@ -467,11 +483,29 @@ function setupLabeledLoadImage(nodeType) {
     const onNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
         onNodeCreated?.apply(this, arguments);
+        const node = this;
+
+        node._moonAutoPreview = debounce(() => {
+            if (widgetValue(node, "image", "")) runPreview(node);
+        }, PREVIEW_DEBOUNCE_MS);
+
         for (const { name, fallback } of COLOR_WIDGETS) {
-            replaceWithColorWidget(this, name, fallback);
+            replaceWithColorWidget(node, name, fallback);
         }
-        this.addCustomWidget(new EditCropButtonWidget());
-        this.addCustomWidget(new PreviewButtonWidget());
+
+        for (const name of AUTO_PREVIEW_WIDGET_NAMES) {
+            const w = node.widgets?.find((w) => w.name === name);
+            if (!w) continue;
+            const original = w.callback;
+            w.callback = function (...args) {
+                const ret = original ? original.apply(this, args) : undefined;
+                node._moonAutoPreview();
+                return ret;
+            };
+        }
+
+        node.addCustomWidget(new EditCropButtonWidget());
+        node.addCustomWidget(new PreviewButtonWidget());
     };
 
     const onRemoved = nodeType.prototype.onRemoved;

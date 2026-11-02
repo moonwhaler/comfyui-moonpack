@@ -57,6 +57,8 @@ All nodes are under the **MoonPack/** category in the Add Node menu.
 |---|---|
 | **MoonLoRA Loader** | Applies any number of LoRAs to `MODEL`/`CLIP` and concatenates the trigger text of the enabled ones into a single `STRING`. |
 | **Dynamic LoRA Stack** | Auto-expanding `WANVIDLORA` stacker (designed for kijai's WanVideoWrapper). Flattens nested lists; an empty stack returns `[]`, not `None`. |
+| **MOSS Regional LoRA** | MOSS-Image only. Applies LoRAs per *Create Bounding Boxes* box: each LoRA's delta is masked per image token, so outside its box it contributes nothing. One model pass per step. |
+| **MOSS Box LoRA** | Chainable LoRA → box assignment (`@id`, box number, `*` or `background`) with strength and start/end percent, for MOSS Regional LoRA. |
 
 ### MoonPack/utils
 
@@ -138,6 +140,70 @@ trigger words from the output.
 
 Everything is local. There is no Civitai lookup and no trigger-word scraping;
 the text is whatever you type, stored in the workflow.
+
+### MOSS Regional LoRA — LoRAs per bounding box
+
+Regular LoRAs bleed into the whole MOSS-Image picture. This node adds each
+LoRA in bypass mode (`W·x + m · s · ΔW·x`) and multiplies its delta by the
+box's token mask `m`, so a character LoRA only acts inside its box. The base
+weights stay untouched, which also works with int8/fp8 checkpoints.
+
+```
+Create Bounding Boxes.elements ─┐
+Load Diffusion Model.MODEL ─────┴─► MOSS Regional LoRA ─┬─ elements, prompt ─► MOSS-Image Layout Prompt ─► Text Encoder
+                                                         └─ MODEL ─► KSampler
+```
+
+Always feed the node's **cleaned** `elements` and `prompt` into
+*MOSS-Image Layout Prompt*, otherwise the tag text ends up in the caption.
+
+**Tags in a box description**
+
+```
+@anna woman in a red coat <lora:anna_moss:0.9> <lora:film_grain:0.4>
+```
+
+- `@anna` names the box (optional; boxes are also addressed by the number shown
+  in the bounding box preview, starting at 1). Ids and tags are stripped.
+- `<lora:name>` / `<lora:name:weight>`: the name may omit `.safetensors` and the
+  subfolder. Several LoRAs in one box add up.
+- Keep trigger words outside the tag, so they reach the caption.
+
+**Tags in the scene prompt:** `<lora:style:0.5>` applies to the whole image like
+a normal LoRA; `<lora:location:0.8:outside>` only acts outside the LoRA boxes.
+
+**MOSS Box LoRA** nodes do the same with a LoRA dropdown and a
+`start_percent`/`end_percent` schedule. Chain them into `regions`. For the same
+box and file, the node wins over a tag.
+
+**Masks**
+
+- `feather` softens box edges (fraction of the box's shorter side, max 0.3);
+  `skirt` grows every LoRA box by a fraction of the image's shorter side. A
+  tiny box always keeps at least one full-strength token.
+- Overlaps follow drawing order: a later box sits on top of an earlier one, so
+  draw the background first and the foreground last, as the layout docs advise.
+  Only boxes that carry a LoRA take part.
+- `text_tokens = masked` (default) keeps box LoRAs off the text tokens, which
+  gives the least bleed. Set it to `global` if a LoRA needs its trigger words to
+  be processed by its own weights.
+- `mask_preview` shows one mask per LoRA box, then the background mask if one is
+  used, at `preview_width` × `preview_height`.
+
+**Limits**
+
+- Only additive adapters (LoRA, LoHa, LoKr) can be masked. Bias/diff patches and
+  OFT in a regional assignment are skipped with a warning; global assignments
+  apply them as normal weight patches. DoRA magnitude is ignored.
+- The embedder and the modulation layers have no per-token place to mask, so box
+  LoRAs skip them. A `*` LoRA applies there too.
+- Attention still mixes tokens, so a little style can seep into neighbouring
+  regions. Layout prompts are experimental in MOSS: a subject drawn outside its
+  box loses its LoRA. Keep boxes generous, or use `skirt`.
+- On int8/fp8 checkpoints, layers carrying a LoRA leave the fused quantized
+  kernel path, so sampling gets slower.
+- Use one MOSS Regional LoRA node per model. Feed extra LoRAs through
+  MOSS Box LoRA nodes, not a second regional node.
 
 ### Text Builder — prompt fragments as a stack
 

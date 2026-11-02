@@ -64,6 +64,10 @@ from .labeled_load_image_node import (
     NODE_CLASS_MAPPINGS as lli_class_mappings,
     NODE_DISPLAY_NAME_MAPPINGS as lli_display_mappings,
 )
+from .moss_regional_lora_node import (
+    NODE_CLASS_MAPPINGS as mrl_class_mappings,
+    NODE_DISPLAY_NAME_MAPPINGS as mrl_display_mappings,
+)
 from . import server_routes  # noqa: F401 - registers /moonpack/* HTTP routes
 
 log = logging.getLogger("MoonPack")
@@ -85,6 +89,7 @@ NODE_CLASS_MAPPINGS = {
     **il_class_mappings,
     **rg_class_mappings,
     **lli_class_mappings,
+    **mrl_class_mappings,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -104,6 +109,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **il_display_mappings,
     **rg_display_mappings,
     **lli_display_mappings,
+    **mrl_display_mappings,
 }
 
 # Legacy aliases keep workflows saved with v0.1 keys loadable. Remove in 1.0.

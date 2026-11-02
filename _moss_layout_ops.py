@@ -321,3 +321,30 @@ def bbox_outputs(boxes, width, height):
         out.append({"x": round(x * width), "y": round(y * height),
                     "width": round(bw * width), "height": round(bh * height)})
     return [out] if out else []
+
+
+def caption_spans(decoded, offsets, captions):
+    """Token spans of the item captions inside the tokenized layout prompt.
+
+    decoded:  the token sequence decoded to text (special tokens kept)
+    offsets:  len(n_tokens + 1) char offsets, offsets[i] = len(decode(ids[:i]))
+    captions: the item captions in item order (as they appear in the JSON)
+
+    Returns a list of (t0, t1) token spans covering each caption's text, or None
+    when a caption can't be found (the prompt was changed after this node).
+    """
+    spans, pos = [], 0
+    n = len(offsets) - 1
+    for caption in captions:
+        quoted = json.dumps(caption, ensure_ascii=False)
+        # compact ("caption":"…") and pretty ("caption": "…") output both occur
+        m = re.compile(r'"caption"\s*:\s*' + re.escape(quoted)).search(decoded, pos)
+        if m is None:
+            return None
+        c0 = m.end() - len(quoted) + 1
+        c1 = m.end() - 1
+        pos = c1
+        t0 = max(i for i in range(n + 1) if offsets[i] <= c0)
+        t1 = min(i for i in range(n + 1) if offsets[i] >= c1)
+        spans.append((min(t0, n), max(t1, t0 + 1)))
+    return spans

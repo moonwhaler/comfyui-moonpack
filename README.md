@@ -195,6 +195,34 @@ fullscreen, docking. Both nodes can be installed side by side. On top of that:
 - `mask_preview` outputs one mask per LoRA box (box order), then the
   background mask if an `outside` scene LoRA is used.
 
+**Overlapping characters: `ownership = attention`**
+
+With `ownership = box` the drawing decides: where two LoRA boxes overlap, the
+front box (box 1) owns the overlap, and a character that spills out of its box
+loses its LoRA there. `ownership = attention` lets the model decide instead,
+similar to FreeFuse:
+
+1. For the first `measure_until` of sampling (default 30 %), the box masks
+   apply while the node measures, in the middle transformer blocks, how much
+   each image area attends to each box's caption (including its trigger words).
+2. Then every token that is contested goes to the box whose caption it attends
+   to most: tokens in an overlap, or in the `spill` ring around a box (default
+   10 % of the image's shorter side; there a LoRA only takes tokens that clearly
+   attend to it). Tokens inside only one box keep the box mask.
+
+The console logs how many tokens each box gained and lost against its drawn box.
+Connect the same CLIP you encode the prompt with to the `clip` input; it is only
+used to find each caption's tokens. If the prompt is changed after this node
+(e.g. extra text, prompt-weight markup), the token count no longer matches and
+the node falls back to the box masks with a warning. `measure_until`, `spill`
+and the editor's **Masks** view stay geometric; the attention decision happens
+during sampling.
+
+`text_tokens = own caption` (also needs `clip`) lets each box LoRA act on its
+box's image tokens plus the tokens of its own caption, e.g. its trigger words,
+but not on other boxes' captions. For character LoRAs this keeps most of what
+`global` gives without leaking into other characters' captions.
+
 **Limits**
 
 - Only additive adapters (LoRA, LoHa, LoKr) can be masked. Bias/diff patches and

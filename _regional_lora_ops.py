@@ -118,3 +118,68 @@ def schedule_active(sigma, sigma_start, sigma_end):
     if sigma_end is not None and sigma <= sigma_end:
         return False
     return True
+
+
+# --- attention ownership ----------------------------------------------------
+
+def measured_layers(n_blocks):
+    """Blocks whose attention is measured: the middle third, every second block."""
+    lo, hi = n_blocks // 3, (2 * n_blocks) // 3
+    return list(range(lo, hi, 2)) or list(range(n_blocks))
+
+
+def _median(values):
+    vals = sorted(values)
+    if not vals:
+        return 0.0
+    mid = len(vals) // 2
+    return vals[mid] if len(vals) % 2 else 0.5 * (vals[mid - 1] + vals[mid])
+
+
+def ownership_masks(geo, reach, scores, grid_h, grid_w, ring_min=0.5):
+    """Exclusive LoRA masks where the model, not the drawing, decides contested tokens.
+
+    geo:    {box: flat geometric mask (feather/skirt applied)}
+    reach:  {box: flat 0/1 mask of the box grown by `spill`} (contains the box)
+    scores: {box: flat attention mass of the image tokens to the box's caption}
+
+    A token inside exactly one reach region, and inside that box, keeps the
+    geometric value. Every other token in some reach region is contested: the
+    box whose caption it attends to most (relative to that box's own median
+    inside the box) takes it, weighted by clamp(score, 0, 1). In the ring
+    outside its box a LoRA needs a score >= ring_min. Contested values are
+    softened with a 3x3 mean. Returns ({box: mask}, background).
+    """
+    n = grid_h * grid_w
+    boxes = list(geo)
+    norm = {}
+    for r in boxes:
+        inside = [scores[r][i] for i in range(n) if geo[r][i] > 0.5]
+        med = _median(inside)
+        norm[r] = [v / med for v in scores[r]] if med > 0 else [0.0] * n
+    owned = {r: [0.0] * n for r in boxes}
+    contested = [False] * n
+    for i in range(n):
+        cands = [r for r in boxes if reach[r][i] > 0]
+        if not cands:
+            continue
+        if len(cands) == 1 and geo[cands[0]][i] > 0:
+            owned[cands[0]][i] = geo[cands[0]][i]
+            continue
+        contested[i] = True
+        best = max(cands, key=lambda r: norm[r][i])
+        s = norm[best][i]
+        if geo[best][i] <= 0 and s < ring_min:
+            continue
+        owned[best][i] = max(0.0, min(1.0, s))
+    smoothed = {r: list(m) for r, m in owned.items()}
+    for i in range(n):
+        if not contested[i]:
+            continue
+        y, x = divmod(i, grid_w)
+        cells = [(yy * grid_w + xx) for yy in range(max(0, y - 1), min(grid_h, y + 2))
+                 for xx in range(max(0, x - 1), min(grid_w, x + 2))]
+        for r in boxes:
+            smoothed[r][i] = sum(owned[r][c] for c in cells) / len(cells)
+    background = [max(0.0, 1.0 - sum(smoothed[r][i] for r in boxes)) for i in range(n)]
+    return smoothed, background

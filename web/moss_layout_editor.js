@@ -343,7 +343,7 @@ registerPromptBuilder({
     bar.appendChild(sizeBtn);
 
     // Mask overlay toggle
-    const maskBtn = button(ed, "Masks", "Show where each box's LoRAs act (token grid, feather, skirt, overlaps)", () => {
+    const maskBtn = button(ed, "Masks", "Show where each box's LoRAs act (token grid, feather, skirt, overlaps). With ownership = attention these are the masks used while measuring; overlaps and spill are decided during sampling.", () => {
       node.properties.maskOverlay = !node.properties.maskOverlay;
       maskBtn.classList.toggle("active", !!node.properties.maskOverlay);
       ed.draw();

@@ -81,3 +81,19 @@ def test_front_first_compose():
     back = ops.box_mask([0, 0, 1000, 1000], 2, 2)
     owned, _ = ops.compose_masks([back, front])  # back first, as the engine passes reversed order
     assert owned[1] == [1.0] * 4 and owned[0] == [0.0] * 4
+
+
+def test_caption_spans_with_char_tokens():
+    prompt = json.dumps({"items": [{"caption": "Mädchen, trig"}, {"caption": "car"}, {"caption": "car"}]},
+                        ensure_ascii=False)
+    decoded = "<s>" + prompt + "</s>"
+    tokens = ["<s>"] + [prompt[i:i + 3] for i in range(0, len(prompt), 3)] + ["</s>"]
+    offsets = [0]
+    for t in tokens:
+        offsets.append(offsets[-1] + len(t))
+    spans = lo.caption_spans(decoded, offsets, ["Mädchen, trig", "car", "car"])
+    assert spans is not None and len(spans) == 3
+    for (t0, t1), cap in zip(spans, ["Mädchen, trig", "car", "car"]):
+        assert cap in "".join(tokens[t0:t1])
+    assert spans[1] != spans[2]                            # duplicates map in order
+    assert lo.caption_spans(decoded, offsets, ["missing"]) is None

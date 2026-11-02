@@ -102,26 +102,51 @@ class _Group:
 
 
 class _CallContext:
-    __slots__ = ("grid", "text_len", "active", "device", "dtype", "cache")
+    __slots__ = ("grid", "text_len", "active", "device", "dtype", "cache", "cond_rows", "batch", "spans_valid")
 
-    def __init__(self, grid, text_len, active, device, dtype):
+    def __init__(self, grid, text_len, active, device, dtype, cond_rows=None, batch=1, spans_valid=False):
         self.grid = grid
         self.text_len = text_len
         self.active = active
         self.device = device
         self.dtype = dtype
         self.cache = {}
+        self.cond_rows = cond_rows    # batch rows that are positive conditioning (None = unknown)
+        self.batch = batch
+        self.spans_valid = spans_valid  # the call's text is the tokenized layout prompt
+
+
+TEXT_MASKED, TEXT_GLOBAL, TEXT_OWN = "masked", "global", "own caption"
+
+
+def _cond_rows(transformer_options, batch):
+    """Batch rows of positive conditioning, from cond_or_uncond (0 = cond)."""
+    kinds = transformer_options.get("cond_or_uncond")
+    if not kinds or batch % len(kinds):
+        return None
+    per = batch // len(kinds)
+    return [c * per + j for c, k in enumerate(kinds) if k == 0 for j in range(per)]
 
 
 class RegionalLoraManager:
     """Owns the hooks, the per-call mask context and the schedule of one node output."""
 
-    def __init__(self, boxes, entries, feather, skirt, text_global):
+    def __init__(self, boxes, entries, feather, skirt, text_mode, ownership=None):
         self.boxes = boxes            # {box index: bbox} for boxes that carry a LoRA; index 0 = front-most
         self.entries = entries        # dicts: target, strength, start, end, lora
         self.feather = feather
         self.skirt = skirt
-        self.text_global = text_global
+        self.text_mode = text_mode    # TEXT_MASKED | TEXT_GLOBAL | TEXT_OWN
+        # attention ownership: {"spans": {box: (t0, t1)}, "n_tokens": int, "measure_until": f, "spill": f}
+        self.ownership = ownership
+        self.attention = bool(ownership and ownership.get("attention"))  # measure, then decide ownership
+        self.spans = (ownership or {}).get("spans") or {}
+        self.n_tokens = (ownership or {}).get("n_tokens")
+        self.measure_sigma = None     # measure while sigma > this (set in on_pre_run)
+        self.scores = None            # {box: (H*W,) float32 tensor} accumulated attention mass
+        self.score_grid = None
+        self.owned_ready = False
+        self._warned = set()
         self.modules = {}             # module path -> [ _Group ]
         self.handles = []
         self.forced = {}              # module -> previous comfy_force_forward
@@ -156,6 +181,17 @@ class RegionalLoraManager:
             end = None if e["end"] >= 1.0 else float(sampling.percent_to_sigma(e["end"]))
             bounds.append((start, end))
         self.sigma_bounds = bounds
+        # every sampling run measures afresh
+        self.scores, self.score_grid, self.owned_ready = None, None, False
+        self._mask_cache.clear()
+        if self.attention and self.spans:
+            until = float(self.ownership.get("measure_until", 0.3))
+            self.measure_sigma = float(sampling.percent_to_sigma(until)) if sampling is not None else None
+
+    def _warn_once(self, key, msg, *args):
+        if key not in self._warned:
+            self._warned.add(key)
+            log.warning(msg, *args)
 
     # --- masks ----------------------------------------------------------
     def image_masks(self, grid_h, grid_w, device, dtype):
@@ -166,12 +202,17 @@ class RegionalLoraManager:
         cached = self._mask_cache.get(key)
         if cached is not None:
             return cached
-        order = sorted(self.boxes, reverse=True)  # box 0 is front-most: compose back to front
-        raw = [ops.box_mask(self.boxes[i], grid_h, grid_w, self.feather, self.skirt) for i in order]
-        owned, background = ops.compose_masks(raw)
-        masks = {i: torch.tensor(m, device=device, dtype=dtype) for i, m in zip(order, owned)}
-        masks[ops.BACKGROUND] = (torch.tensor(background, device=device, dtype=dtype) if background is not None
-                                 else torch.ones(grid_h * grid_w, device=device, dtype=dtype))
+        if self.owned_ready and self.score_grid == (grid_h, grid_w):
+            owned_d, background = self._ownership_lists(grid_h, grid_w)
+            masks = {i: torch.tensor(m, device=device, dtype=dtype) for i, m in owned_d.items()}
+            masks[ops.BACKGROUND] = torch.tensor(background, device=device, dtype=dtype)
+        else:
+            order = sorted(self.boxes, reverse=True)  # box 0 is front-most: compose back to front
+            raw = [ops.box_mask(self.boxes[i], grid_h, grid_w, self.feather, self.skirt) for i in order]
+            owned, background = ops.compose_masks(raw)
+            masks = {i: torch.tensor(m, device=device, dtype=dtype) for i, m in zip(order, owned)}
+            masks[ops.BACKGROUND] = (torch.tensor(background, device=device, dtype=dtype) if background is not None
+                                     else torch.ones(grid_h * grid_w, device=device, dtype=dtype))
         if len(self._mask_cache) > 4:
             self._mask_cache.clear()
         self._mask_cache[key] = masks
@@ -184,7 +225,7 @@ class RegionalLoraManager:
         ctx = self.ctx
         if ctx is None or kind == ops.VEC:
             return 0.0
-        text_value = 1.0 if self.text_global else 0.0
+        text_value = 1.0 if self.text_mode == TEXT_GLOBAL else 0.0
         if kind == ops.TEXT:
             return text_value
         grid_h, grid_w = ctx.grid
@@ -205,7 +246,15 @@ class RegionalLoraManager:
             parts.append(torch.full((text,), text_value, device=ctx.device, dtype=ctx.dtype))
         if length - hw - text > 0:
             parts.append(torch.zeros(length - hw - text, device=ctx.device, dtype=ctx.dtype))
-        return torch.cat(parts).view(1, length, 1)
+        mask = torch.cat(parts).view(1, length, 1)
+        span = self.spans.get(target) if isinstance(target, int) else None
+        if self.text_mode == TEXT_OWN and span is not None and ctx.spans_valid and ctx.cond_rows:
+            # own caption: the box's caption tokens, in positive-conditioning rows only
+            mask = mask.expand(ctx.batch, length, 1).clone()
+            t0, t1 = span
+            rows = torch.tensor(ctx.cond_rows, device=ctx.device)
+            mask[rows, hw + t0:hw + min(t1, text)] = 1.0
+        return mask
 
     def weight_for(self, group, length):
         """Sum of strength * mask over the group's active entries (float or tensor)."""
@@ -303,14 +352,107 @@ class RegionalLoraManager:
             if sigma is None or ops.schedule_active(sigma, start, end):
                 active.add(i)
         text_len = context.shape[1] if context is not None and context.dim() >= 2 else 0
-        self.ctx = _CallContext(tuple(x.shape[-2:]), text_len, active, x.device, x.dtype)
+        cond_rows = _cond_rows(transformer_options, x.shape[0])
+        spans_valid = bool(self.spans) and self.n_tokens == text_len
+        if self.spans and cond_rows and not spans_valid:
+            self._warn_once("len", "MOSS Regional Layout: the positive prompt has %d tokens, expected %d; "
+                            "the prompt was changed after this node, so attention ownership and 'own caption' "
+                            "fall back to the box masks.", text_len, self.n_tokens)
+        grid = tuple(x.shape[-2:])
+        measuring = (self.attention and spans_valid and bool(cond_rows) and sigma is not None
+                     and self.measure_sigma is not None and sigma > self.measure_sigma)
+        if (self.attention and not measuring and not self.owned_ready and self.scores is not None
+                and sigma is not None and self.measure_sigma is not None and sigma <= self.measure_sigma):
+            self._finish_measurement()
+        self.ctx = _CallContext(grid, text_len, active, x.device, x.dtype, cond_rows, x.shape[0], spans_valid)
         try:
             if any(self.entries[i]["target"] != ops.GLOBAL for i in active):
                 # built before the blocks run, outside the memory-compiler region
                 self.image_masks(x.shape[-2], x.shape[-1], x.device, x.dtype)
+            if measuring:
+                transformer_options = {**transformer_options,
+                                       "optimized_attention_override": self._make_override(
+                                           transformer_options.get("optimized_attention_override"), grid, text_len, cond_rows)}
             return executor(x, timestep, context, transformer_options, **kwargs)
         finally:
             self.ctx = None
+
+    # --- attention measurement ------------------------------------------
+    def _make_override(self, previous, grid, text_len, cond_rows):
+        """Attention override that records image->caption attention, then runs attention unchanged."""
+        def override(func, *args, **kwargs):
+            to = kwargs.get("transformer_options") or {}
+            block = to.get("block_index")
+            if block is not None and block in self._measure_blocks(to):
+                try:
+                    self._accumulate(args[0], args[1], args[3], grid, text_len, cond_rows)
+                except Exception as e:  # measurement must never break sampling
+                    self._warn_once("measure", "MOSS Regional Layout: attention measurement failed (%s); "
+                                    "using the box masks.", e)
+                    self.attention = False
+            if previous is not None:
+                return previous(func, *args, **kwargs)
+            return func(*args, **kwargs)
+        return override
+
+    def _measure_blocks(self, to):
+        n = to.get("total_blocks") or 42
+        cached = getattr(self, "_blocks_cache", None)
+        if cached is None or cached[0] != n:
+            self._blocks_cache = (n, set(ops.measured_layers(n)))
+        return self._blocks_cache[1]
+
+    def _accumulate(self, q, k, heads, grid, text_len, cond_rows, chunk=1024):
+        import torch
+
+        hw = grid[0] * grid[1]
+        rows = torch.tensor(cond_rows, device=q.device)
+        dh = q.shape[-1] // heads
+        qi = q.index_select(0, rows)[:, :hw].reshape(len(cond_rows), hw, heads, dh).transpose(1, 2)
+        kt = k.index_select(0, rows)[:, hw:hw + text_len].reshape(len(cond_rows), text_len, heads, dh).transpose(1, 2)
+        if self.scores is None or self.score_grid != grid:
+            self.scores = {b: torch.zeros(hw, device=q.device, dtype=torch.float32) for b in self.spans}
+            self.score_grid = grid
+        scale = dh ** -0.5
+        with torch.no_grad():
+            for s0 in range(0, hw, chunk):
+                logits = torch.matmul(qi[:, :, s0:s0 + chunk].float(), kt.float().transpose(-1, -2)) * scale
+                probs = logits.softmax(-1)  # over the text tokens: which part of the prompt each image token reads
+                for b, (t0, t1) in self.spans.items():
+                    self.scores[b][s0:s0 + chunk] += probs[..., t0:t1].sum(-1).mean(dim=(0, 1))
+
+    def _finish_measurement(self):
+        self.owned_ready = True
+        self._mask_cache.clear()
+        gh, gw = self.score_grid
+        owned, _ = self._ownership_lists(gh, gw)
+        geo = {b: ops.box_mask(self.boxes[b], gh, gw, self.feather, self.skirt) for b in owned}
+        parts = []
+        for b in sorted(owned):
+            moved = sum(1 for i in range(gh * gw) if owned[b][i] > 0.5 and geo[b][i] <= 0.5)
+            lost = sum(1 for i in range(gh * gw) if owned[b][i] <= 0.5 and geo[b][i] > 0.5)
+            parts.append(f"box {b + 1}: +{moved}/-{lost} tokens")
+        log.info("MOSS Regional Layout: attention ownership vs. the drawn boxes: %s", ", ".join(parts))
+
+    def _ownership_lists(self, gh, gw):
+        cached = getattr(self, "_own_cache", None)
+        if cached is not None and cached[0] == (gh, gw, id(self.scores)):
+            return cached[1]
+        spill = float(self.ownership.get("spill", 0.1)) if self.ownership else 0.1
+        boxes = [b for b in self.boxes if b in self.scores]
+        geo = {b: ops.box_mask(self.boxes[b], gh, gw, self.feather, self.skirt) for b in boxes}
+        reach = {b: [1.0 if v > 0 else 0.0 for v in ops.box_mask(self.boxes[b], gh, gw, 0.0, self.skirt + spill)]
+                 for b in boxes}
+        scores = {b: self.scores[b].tolist() for b in boxes}
+        owned, background = ops.ownership_masks(geo, reach, scores, gh, gw)
+        # boxes with a LoRA but no caption span keep their geometric mask (painter's order below them)
+        for b in self.boxes:
+            if b not in owned:
+                m = ops.box_mask(self.boxes[b], gh, gw, self.feather, self.skirt)
+                owned[b] = [m[i] * background[i] for i in range(gh * gw)]
+                background = [background[i] - owned[b][i] for i in range(gh * gw)]
+        self._own_cache = ((gh, gw, id(self.scores)), (owned, background))
+        return owned, background
 
 
 ADDITIVE_ADAPTERS = ("LoRAAdapter", "LoHaAdapter", "LoKrAdapter")
@@ -327,7 +469,7 @@ def _set_adapter_shape(adapter, module, offset):
     adapter.out_channels = offset[2] if offset is not None else getattr(module, "out_features", None)
 
 
-def apply_regional_loras(model, boxes, entries, feather, skirt, text_global):
+def apply_regional_loras(model, boxes, entries, feather, skirt, text_mode, ownership=None):
     """Returns a patched clone of `model`. entries: dicts with target/lora/strength/start/end."""
     import comfy.lora
     import comfy.lora_convert
@@ -351,7 +493,11 @@ def apply_regional_loras(model, boxes, entries, feather, skirt, text_global):
         return clone
 
     used_boxes = {e["target"] for e in entries if isinstance(e["target"], int)}
-    manager = RegionalLoraManager({i: boxes[i] for i in sorted(used_boxes)}, entries, feather, skirt, text_global)
+    if isinstance(text_mode, bool):  # older callers
+        text_mode = TEXT_GLOBAL if text_mode else TEXT_MASKED
+    if ownership is not None:
+        ownership = {**ownership, "spans": {b: s for b, s in (ownership.get("spans") or {}).items() if b in used_boxes}}
+    manager = RegionalLoraManager({i: boxes[i] for i in sorted(used_boxes)}, entries, feather, skirt, text_mode, ownership)
 
     key_map = comfy.lora.model_lora_keys_unet(model.model, {})
     root = model.model.diffusion_model

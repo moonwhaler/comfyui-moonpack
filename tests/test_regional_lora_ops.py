@@ -70,3 +70,49 @@ def test_schedule_active():
     assert ops.schedule_active(5.0, 10.0, 1.0)
     assert not ops.schedule_active(11.0, 10.0, 1.0)
     assert not ops.schedule_active(1.0, 10.0, 1.0)
+
+
+# --- attention ownership ----------------------------------------------------
+
+def test_measured_layers_middle_third():
+    assert ops.measured_layers(42) == [14, 16, 18, 20, 22, 24, 26]
+    assert ops.measured_layers(2) == [0]
+
+
+def _ownership_fixture():
+    # 1 x 6 strip: box A covers cells 0-3, box B covers 2-5 (overlap 2-3); no spill.
+    geo = {0: [1, 1, 1, 1, 0, 0], 1: [0, 0, 1, 1, 1, 1]}
+    reach = {0: [1, 1, 1, 1, 0, 0], 1: [0, 0, 1, 1, 1, 1]}
+    return geo, reach
+
+
+def test_ownership_overlap_follows_attention():
+    geo, reach = _ownership_fixture()
+    # A's caption is attended in cells 0-2, B's in 3-5
+    scores = {0: [1, 1, 1, 0.1, 0, 0], 1: [0, 0, 0.1, 1, 1, 1]}
+    owned, bg = ops.ownership_masks(geo, reach, scores, 1, 6)
+    assert owned[0][0] == 1 and owned[1][5] == 1          # exclusive zones stay geometric
+    assert owned[0][2] > owned[1][2] and owned[1][3] > owned[0][3]
+    for i in range(6):
+        assert owned[0][i] + owned[1][i] + bg[i] == __import__("pytest").approx(1.0)
+
+
+def test_ownership_back_box_wins_overlap_when_attended():
+    geo, reach = _ownership_fixture()
+    scores = {0: [1, 1, 0, 0, 0, 0], 1: [0, 0, 1, 1, 1, 1]}  # B (the back box) owns the overlap
+    owned, _ = ops.ownership_masks(geo, reach, scores, 1, 6)
+    assert owned[1][2] > 0.5 and owned[1][3] > 0.5 and owned[0][3] == 0
+
+
+def test_ownership_ring_needs_score():
+    geo = {0: [0, 1, 1, 0, 0, 0]}
+    reach = {0: [1, 1, 1, 1, 1, 0]}
+    owned, _ = ops.ownership_masks(geo, reach, {0: [0.9, 1, 1, 0.2, 0, 0]}, 1, 6)
+    assert owned[0][0] > 0 and owned[0][5] == 0           # spill only where the subject is attended
+    assert owned[0][4] < 0.5
+
+
+def test_ownership_without_measurement_is_empty_contest():
+    geo, reach = _ownership_fixture()
+    owned, bg = ops.ownership_masks(geo, reach, {0: [0] * 6, 1: [0] * 6}, 1, 6)
+    assert owned[0][0] == 1 and owned[0][2] < 0.5 and owned[1][3] < 0.5  # only the soft edge reaches in

@@ -154,6 +154,34 @@ def _bg_image(image):
         return None
 
 
+def caption_token_spans(clip, prompt, lay, boxes):
+    """({box index: (t0, t1)}, n_tokens) of each visible box caption in the tokenized prompt, or None.
+
+    Tokenizes exactly like CLIP Text Encode (clip.tokenize), then maps characters to
+    tokens by decoding growing prefixes (the Qwen tokenizer has no offset mapping).
+    """
+    try:
+        tokens = clip.tokenize(prompt)
+        seqs = next(iter(tokens.values()))
+        if len(seqs) != 1:
+            raise ValueError(f"{len(seqs)} token sequences")
+        ids = [t[0] for t in seqs[0]]
+        if not all(isinstance(i, int) for i in ids):
+            raise ValueError("non-text tokens in the prompt")
+        tok = clip.tokenizer
+        hf = getattr(tok, tok.clip).tokenizer
+        decoded = hf.decode(ids, skip_special_tokens=False)
+        offsets = [len(hf.decode(ids[:i], skip_special_tokens=False)) for i in range(len(ids) + 1)]
+        visible = [i for i, b in enumerate(boxes) if layout_ops.visible(b)]
+        spans = layout_ops.caption_spans(decoded, offsets, [it["caption"] for it in lay["items"]])
+        if spans is None:
+            raise ValueError("captions not found in the tokenized prompt")
+        return dict(zip(visible, spans)), len(ids)
+    except Exception as e:
+        log.warning("MOSS Regional Layout: could not map the box captions to tokens (%s); using the box masks.", e)
+        return None
+
+
 def resolve_entries(entries, available):
     """Maps every entry's LoRA name onto a file in the loras folder (raises with suggestions)."""
     return [{**e, "lora": engine._resolve_lora(e["lora"], available)} for e in entries]
@@ -186,9 +214,22 @@ class MOSSRegionalLayout:
                                       "tooltip": "Soft LoRA mask edge, as a fraction of the box's shorter side."}),
                 "skirt": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01,
                                     "tooltip": "Grows every LoRA mask by this fraction of the image's shorter side."}),
-                "text_tokens": (["masked", "global"], {
+                "text_tokens": (["masked", "global", "own caption"], {
                     "tooltip": "masked: box LoRAs skip the text tokens (least bleed). "
-                               "global: box LoRAs also act on the text tokens (more bleed)."}),
+                               "global: box LoRAs also act on all text tokens (more bleed). "
+                               "own caption: each box LoRA also acts on its own caption's tokens, e.g. its "
+                               "trigger words (needs the clip input)."}),
+                "ownership": (["box", "attention"], {
+                    "tooltip": "box: the drawn boxes decide where each LoRA acts (box 1 is in front). "
+                               "attention: during the first steps the node measures which caption each image "
+                               "area belongs to, then overlaps and the area around a box go to the character "
+                               "that is actually there (needs the clip input)."}),
+                "measure_until": ("FLOAT", {"default": 0.3, "min": 0.05, "max": 0.9, "step": 0.05,
+                                            "tooltip": "attention ownership: fraction of sampling used to measure; "
+                                                       "the box masks apply meanwhile."}),
+                "spill": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 0.3, "step": 0.01,
+                                    "tooltip": "attention ownership: how far beyond its box a LoRA may follow its "
+                                               "subject, as a fraction of the image's shorter side."}),
                 # Data widgets, hidden and managed by the editor.
                 "elements_data": ("STRING", {"default": "", "socketless": True}),
                 "scene_loras_data": ("STRING", {"default": "", "socketless": True}),
@@ -203,6 +244,9 @@ class MOSSRegionalLayout:
                                            "tooltip": "Optional MOSS-Image layout JSON to load into the editor."}),
                 "bboxes": ("BOUNDING_BOX", {"forceInput": True,
                                             "tooltip": "Optional pixel boxes to seed an empty editor."}),
+                "clip": ("CLIP", {"tooltip": "The MOSS text encoder used for this prompt. Only needed for "
+                                             "ownership = attention and text_tokens = own caption; it is used to "
+                                             "find each box caption's tokens, the prompt is not changed."}),
             },
         }
 
@@ -215,7 +259,7 @@ class MOSSRegionalLayout:
     def build(self, model, width, height, prompt="", meta="", canvas="none", feather=0.1, skirt=0.0,
               text_tokens="masked", elements_data="", scene_loras_data="", style_palette_data="",
               bg_brightness=25, import_mode="when empty", output_format="compact",
-              image=None, import_json=None, bboxes=None):
+              image=None, import_json=None, bboxes=None, clip=None, ownership="box", measure_until=0.3, spill=0.1):
         import json
 
         boxes = layout_ops.parse_json_list(elements_data)
@@ -259,7 +303,20 @@ class MOSSRegionalLayout:
         if entries:
             import folder_paths
             entries = resolve_entries(entries, folder_paths.get_filename_list("loras"))
-        patched = engine.apply_regional_loras(model, box_bboxes, entries, feather, skirt, text_tokens == "global")
+        own = None
+        needs_spans = ownership == "attention" or text_tokens == "own caption"
+        if needs_spans and lay is not None and any(isinstance(e["target"], int) for e in entries):
+            if clip is None:
+                log.warning("MOSS Regional Layout: ownership = attention / text_tokens = own caption need the clip "
+                            "input; using the box masks.")
+            else:
+                spans = caption_token_spans(clip, out, lay, boxes)
+                if spans is not None:
+                    own = {"spans": spans[0], "n_tokens": spans[1], "attention": ownership == "attention",
+                           "measure_until": measure_until, "spill": spill}
+        patched = engine.apply_regional_loras(model, box_bboxes, entries, feather, skirt,
+                                              text_tokens if own is not None or text_tokens != "own caption"
+                                              else "masked", own)
 
         preview = render_preview(boxes, width, height, _bg_image(image), bg_brightness)
         masks = engine.preview_masks(box_bboxes, entries, feather, skirt, width, height)

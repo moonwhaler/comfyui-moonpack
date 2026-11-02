@@ -1,0 +1,109 @@
+{
+ "boxes": [
+  {
+   "x": 0.1,
+   "y": 0.2,
+   "w": 0.3,
+   "h": 0.5,
+   "type": "character",
+   "desc": "woman in red",
+   "tags": "a, b",
+   "palette": [
+    "#FF0000"
+   ]
+  },
+  {
+   "x": 0.6,
+   "y": 0.1,
+   "w": -0.2,
+   "h": 0.3,
+   "type": "text",
+   "text": "HELLO",
+   "desc": "sign",
+   "palette": []
+  },
+  {
+   "x": 0.05,
+   "y": 0.05,
+   "w": 0.9,
+   "h": 0.9,
+   "type": "obj",
+   "desc": "room"
+  },
+  {
+   "x": 0.0,
+   "y": 0.0,
+   "w": 0.2,
+   "h": 0.1,
+   "type": "object",
+   "desc": "unplaced",
+   "nobbox": true
+  }
+ ],
+ "width": 1344,
+ "height": 768,
+ "summary_args": [
+  "a scene",
+  [
+   "photo"
+  ],
+  "single",
+  [
+   "#112233"
+  ]
+ ],
+ "layout": {
+  "summary": {
+   "meta": [
+    "photo"
+   ],
+   "canvas": "single",
+   "caption": "a scene",
+   "palette": [
+    "#112233"
+   ]
+  },
+  "items": [
+   {
+    "label": "character",
+    "caption": "woman in red",
+    "tags": [
+     "a",
+     "b"
+    ],
+    "palette": [
+     "#FF0000"
+    ],
+    "bbox": [
+     -231,
+     -538,
+     154,
+     -134
+    ]
+   },
+   {
+    "label": "text",
+    "caption": "sign",
+    "text": "HELLO",
+    "bbox": [
+     -308,
+     -135,
+     -76,
+     135
+    ]
+   },
+   {
+    "label": "object",
+    "caption": "room",
+    "bbox": [
+     -346,
+     -605,
+     346,
+     605
+    ]
+   }
+  ],
+  "bbox_coord_space": "abs_centralized",
+  "bbox_format": "yxyx"
+ }
+}

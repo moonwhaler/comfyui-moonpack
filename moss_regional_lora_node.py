@@ -1,4 +1,6 @@
-"""Regional LoRA for MOSS-Image: LoRA deltas masked per image token by box.
+"""Regional LoRA engine for MOSS-Image: LoRA deltas masked per image token by box.
+
+Used by the MOSS Regional Layout node (`moss_regional_layout_node.py`).
 
 Each targeted Linear gets a forward hook that adds ``mask * strength * h(x)``
 (the LoRA bypass path) to the layer output, so outside its box a LoRA
@@ -26,7 +28,6 @@ except ImportError:  # importable for tests without package context
 log = logging.getLogger("MoonPack")
 
 INJECTION_KEY = "moonpack_moss_regional_lora"
-REGIONS_TYPE = "MOSS_REGIONAL_LORAS"
 PATCH_SIZE = 16  # pixels per MOSS token edge (FLUX.2 latent, already patchified)
 
 _lora_cache = {}  # path -> (mtime, state dict) of the last run's files, like core LoraLoader
@@ -116,7 +117,7 @@ class RegionalLoraManager:
     """Owns the hooks, the per-call mask context and the schedule of one node output."""
 
     def __init__(self, boxes, entries, feather, skirt, text_global):
-        self.boxes = boxes            # {box index: bbox} for boxes that carry a LoRA, drawing order
+        self.boxes = boxes            # {box index: bbox} for boxes that carry a LoRA; index 0 = front-most
         self.entries = entries        # dicts: target, strength, start, end, lora
         self.feather = feather
         self.skirt = skirt
@@ -165,7 +166,7 @@ class RegionalLoraManager:
         cached = self._mask_cache.get(key)
         if cached is not None:
             return cached
-        order = sorted(self.boxes)
+        order = sorted(self.boxes, reverse=True)  # box 0 is front-most: compose back to front
         raw = [ops.box_mask(self.boxes[i], grid_h, grid_w, self.feather, self.skirt) for i in order]
         owned, background = ops.compose_masks(raw)
         masks = {i: torch.tensor(m, device=device, dtype=dtype) for i, m in zip(order, owned)}
@@ -336,12 +337,12 @@ def apply_regional_loras(model, boxes, entries, feather, skirt, text_global):
 
     if not isinstance(model.model, comfy.model_base.MOSSImage):
         raise ValueError(
-            f"MOSS Regional LoRA only works with MOSS-Image models, got {type(model.model).__name__}."
+            f"MOSS Regional Layout only works with MOSS-Image models, got {type(model.model).__name__}."
         )
     if model.get_injections(INJECTION_KEY) is not None:
         raise ValueError(
-            "MOSS Regional LoRA: this model already went through a MOSS Regional LoRA node. "
-            "Use one node and feed extra LoRAs through MOSS Box LoRA nodes."
+            "MOSS Regional LoRA: this model already went through a MOSS Regional Layout node. "
+            "Put all regional LoRAs into one node."
         )
 
     clone = model.clone()
@@ -419,38 +420,15 @@ def apply_regional_loras(model, boxes, entries, feather, skirt, text_global):
     return clone
 
 
-def build_assignments(elements, prompt, regions, available):
-    """Parses tags and helper input into resolved entries.
-
-    Returns (cleaned elements, cleaned prompt, boxes {index: bbox}, entries).
-    """
-    cleaned, ids, box_tags = ops.parse_elements(elements)
-    clean_prompt, scene_tags = ops.parse_scene_prompt(prompt)
-
-    tag_specs = []
-    for target, name, strength in [(i, n, s) for i, n, s in box_tags] + scene_tags:
-        tag_specs.append({"target": target, "lora": _resolve_lora(name, available),
-                          "strength": strength, "start": 0.0, "end": 1.0})
-    node_specs = []
-    for r in regions or []:
-        node_specs.append({"target": ops.resolve_box(r["box"], ids),
-                           "lora": _resolve_lora(r["lora"], available),
-                           "strength": float(r["strength"]),
-                           "start": float(r.get("start", 0.0)), "end": float(r.get("end", 1.0))})
-    entries = ops.merge_specs(tag_specs, node_specs)
-    boxes = {i: el["bbox"] for i, el in enumerate(cleaned)}
-    return cleaned, clean_prompt, boxes, entries
-
-
 def preview_masks(boxes, entries, feather, skirt, width, height):
-    """MASK batch: one per LoRA box (drawing order), then the background if used."""
+    """MASK batch: one per LoRA box (box-number order), then the background if used."""
     import torch
 
     grid_h, grid_w = max(1, round(height / PATCH_SIZE)), max(1, round(width / PATCH_SIZE))
-    used = sorted({e["target"] for e in entries if isinstance(e["target"], int)})
+    used = sorted({e["target"] for e in entries if isinstance(e["target"], int)}, reverse=True)
     raw = [ops.box_mask(boxes[i], grid_h, grid_w, feather, skirt) for i in used]
-    owned, background = ops.compose_masks(raw)
-    masks = list(owned)
+    owned, background = ops.compose_masks(raw)  # back to front: box 0 is front-most
+    masks = list(reversed(owned))  # output in box-number order
     if any(e["target"] == ops.BACKGROUND for e in entries):
         masks.append(background if background is not None else [1.0] * (grid_h * grid_w))
     if not masks:
@@ -458,101 +436,3 @@ def preview_masks(boxes, entries, feather, skirt, width, height):
     t = torch.tensor(masks, dtype=torch.float32).view(-1, 1, grid_h, grid_w)
     t = torch.nn.functional.interpolate(t, size=(height, width), mode="nearest")
     return t[:, 0]
-
-
-class MOSSRegionalLoRA:
-    DESCRIPTION = (
-        "Applies LoRAs to MOSS-Image per bounding box: each LoRA's delta is multiplied by its "
-        "box's token mask, so outside the box it contributes nothing. Put '@id' and "
-        "'<lora:name:weight>' in a box description; '<lora:name:weight>' in the scene prompt is "
-        "global, '<lora:name:weight:outside>' only outside the LoRA boxes. Feed the cleaned "
-        "elements and prompt into MOSS-Image Layout Prompt."
-    )
-    SEARCH_ALIASES = ["regional lora", "moss", "bounding box lora", "masked lora"]
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model": ("MODEL",),
-                "elements": ("ARRAY", {"tooltip": "Elements from Create Bounding Boxes."}),
-                "prompt": ("STRING", {"multiline": True, "default": "",
-                                      "tooltip": "Scene prompt. Tags here are global or ':outside'."}),
-                "feather": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 0.3, "step": 0.01,
-                                      "tooltip": "Soft edge width as a fraction of the box's shorter side."}),
-                "skirt": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.25, "step": 0.01,
-                                    "tooltip": "Grows every LoRA box by this fraction of the image's shorter side."}),
-                "text_tokens": (["masked", "global"], {
-                    "tooltip": "masked: box LoRAs skip the text tokens (least bleed). "
-                               "global: box LoRAs also act on the text tokens (keeps trigger words, more bleed)."}),
-            },
-            "optional": {
-                "regions": (REGIONS_TYPE, {"tooltip": "LoRA assignments from MOSS Box LoRA nodes."}),
-                "preview_width": ("INT", {"default": 1024, "min": 16, "max": 16384, "step": 16}),
-                "preview_height": ("INT", {"default": 1024, "min": 16, "max": 16384, "step": 16}),
-            },
-        }
-
-    RETURN_TYPES = ("MODEL", "ARRAY", "STRING", "MASK")
-    RETURN_NAMES = ("MODEL", "elements", "prompt", "mask_preview")
-    FUNCTION = "apply"
-    CATEGORY = "MoonPack/lora"
-
-    def apply(self, model, elements, prompt, feather, skirt, text_tokens,
-              regions=None, preview_width=1024, preview_height=1024):
-        import folder_paths
-
-        available = folder_paths.get_filename_list("loras")
-        cleaned, clean_prompt, boxes, entries = build_assignments(elements, prompt, regions, available)
-        patched = apply_regional_loras(model, boxes, entries, feather, skirt, text_tokens == "global")
-        preview = preview_masks(boxes, entries, feather, skirt, preview_width, preview_height)
-        return (patched, cleaned, clean_prompt, preview)
-
-
-class MOSSBoxLoRA:
-    DESCRIPTION = (
-        "Assigns one LoRA to a box for MOSS Regional LoRA. Chain several for several LoRAs. "
-        "box: '@id' name, 1-based box number, '*' for the whole image or 'background' for "
-        "outside the LoRA boxes."
-    )
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        import folder_paths
-
-        return {
-            "required": {
-                "box": ("STRING", {"default": "1", "tooltip": "Box id (e.g. anna), number, '*' or 'background'."}),
-                "lora": (folder_paths.get_filename_list("loras"),),
-                "strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
-                "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
-                "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
-            },
-            "optional": {
-                "regions": (REGIONS_TYPE,),
-            },
-        }
-
-    RETURN_TYPES = (REGIONS_TYPE,)
-    RETURN_NAMES = ("regions",)
-    FUNCTION = "add"
-    CATEGORY = "MoonPack/lora"
-
-    def add(self, box, lora, strength, start_percent, end_percent, regions=None):
-        if end_percent < start_percent:
-            raise ValueError("MOSS Box LoRA: end_percent is before start_percent.")
-        out = list(regions or [])
-        out.append({"box": box, "lora": lora, "strength": strength,
-                    "start": start_percent, "end": end_percent})
-        return (out,)
-
-
-NODE_CLASS_MAPPINGS = {
-    "MoonPack_MOSSRegionalLoRA": MOSSRegionalLoRA,
-    "MoonPack_MOSSBoxLoRA": MOSSBoxLoRA,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "MoonPack_MOSSRegionalLoRA": "MOSS Regional LoRA",
-    "MoonPack_MOSSBoxLoRA": "MOSS Box LoRA",
-}

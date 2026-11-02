@@ -64,7 +64,7 @@ from .labeled_load_image_node import (
     NODE_CLASS_MAPPINGS as lli_class_mappings,
     NODE_DISPLAY_NAME_MAPPINGS as lli_display_mappings,
 )
-from .moss_regional_lora_node import (
+from .moss_regional_layout_node import (
     NODE_CLASS_MAPPINGS as mrl_class_mappings,
     NODE_DISPLAY_NAME_MAPPINGS as mrl_display_mappings,
 )

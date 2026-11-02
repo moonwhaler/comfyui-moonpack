@@ -57,8 +57,7 @@ All nodes are under the **MoonPack/** category in the Add Node menu.
 |---|---|
 | **MoonLoRA Loader** | Applies any number of LoRAs to `MODEL`/`CLIP` and concatenates the trigger text of the enabled ones into a single `STRING`. |
 | **Dynamic LoRA Stack** | Auto-expanding `WANVIDLORA` stacker (designed for kijai's WanVideoWrapper). Flattens nested lists; an empty stack returns `[]`, not `None`. |
-| **MOSS Regional LoRA** | MOSS-Image only. Applies LoRAs per *Create Bounding Boxes* box: each LoRA's delta is masked per image token, so outside its box it contributes nothing. One model pass per step. |
-| **MOSS Box LoRA** | Chainable LoRA → box assignment (`@id`, box number, `*` or `background`) with strength and start/end percent, for MOSS Regional LoRA. |
+| **MOSS Regional Layout** | MOSS-Image only. Box editor (based on kijai's MOSS-Image Prompt Builder) with LoRAs per box: draw boxes, caption them, pick LoRAs per box. Outputs the MOSS layout prompt and a MODEL whose box LoRAs only act inside their box. |
 
 ### MoonPack/utils
 
@@ -141,69 +140,75 @@ trigger words from the output.
 Everything is local. There is no Civitai lookup and no trigger-word scraping;
 the text is whatever you type, stored in the workflow.
 
-### MOSS Regional LoRA — LoRAs per bounding box
+### MOSS Regional Layout — boxes and their LoRAs in one editor
 
-Regular LoRAs bleed into the whole MOSS-Image picture. This node adds each
-LoRA in bypass mode (`W·x + m · s · ΔW·x`) and multiplies its delta by the
-box's token mask `m`, so a character LoRA only acts inside its box. The base
-weights stay untouched, which also works with int8/fp8 checkpoints.
-
-```
-Create Bounding Boxes.elements ─┐
-Load Diffusion Model.MODEL ─────┴─► MOSS Regional LoRA ─┬─ elements, prompt ─► MOSS-Image Layout Prompt ─► Text Encoder
-                                                         └─ MODEL ─► KSampler
-```
-
-Always feed the node's **cleaned** `elements` and `prompt` into
-*MOSS-Image Layout Prompt*, otherwise the tag text ends up in the caption.
-
-**Tags in a box description**
+Regular LoRAs bleed into the whole MOSS-Image picture. This node lets you draw
+the layout and give each box its own LoRAs. Each LoRA is added in bypass mode
+(`W·x + m · s · ΔW·x`) with its delta multiplied by the box's token mask `m`,
+so a character LoRA only acts inside its box. Base weights stay untouched,
+which also works with int8/fp8 checkpoints. One model pass per step.
 
 ```
-@anna woman in a red coat <lora:anna_moss:0.9> <lora:film_grain:0.4>
+Load Diffusion Model ─ MODEL ─► MOSS Regional Layout ─┬─ MODEL  ─► KSampler
+                                                       └─ prompt ─► CLIP Text Encode ─► KSampler
 ```
 
-- `@anna` names the box (optional; boxes are also addressed by the number shown
-  in the bounding box preview, starting at 1). Ids and tags are stripped.
-- `<lora:name>` / `<lora:name:weight>`: the name may omit `.safetensors` and the
-  subfolder. Several LoRAs in one box add up.
-- Keep trigger words outside the tag, so they reach the caption.
+The editor is a fork of kijai's *MOSS-Image Prompt Builder KJ*
+([ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes)) and keeps all of it:
+drawing, layers, palettes, templates, background image, live preview, guides,
+fullscreen, docking. Both nodes can be installed side by side. On top of that:
 
-**Tags in the scene prompt:** `<lora:style:0.5>` applies to the whole image like
-a normal LoRA; `<lora:location:0.8:outside>` only acts outside the LoRA boxes.
-
-**MOSS Box LoRA** nodes do the same with a LoRA dropdown and a
-`start_percent`/`end_percent` schedule. Chain them into `regions`. For the same
-box and file, the node wins over a tag.
+- **LoRAs per box.** Select a box and press **+ LoRA**. Each row has an on/off
+  toggle, the LoRA (click to pick from a filterable list), a strength (−/+,
+  drag sideways, mouse wheel, or double-click to type), trigger words, a
+  schedule (**⋯**: active from/to a fraction of sampling) and **✕** to remove.
+  Several LoRAs in one box add up.
+- **Trigger words** of enabled LoRAs are appended to that box's caption
+  (`caption, trigger`), so they reach the model through the layout prompt.
+- **Scene LoRAs** (toolbar): `all` acts on the whole image like a normal LoRA;
+  `outside` acts only outside the LoRA boxes, e.g. for a location or style that
+  must not touch the characters. Their trigger words go into the scene caption.
+- **Names.** A box name (e.g. *Anna*) shows on the canvas and in the preview.
+  It is not sent to the model.
+- **Hide / solo.** A hidden box is left out of the prompt, the masks and the
+  bboxes but stays on the canvas, dimmed. **Solo** hides every other box until
+  you click it again.
+- **Masks** (toolbar) shows where each box's LoRAs act, on the model's 16-px
+  token grid, including feather, skirt and overlaps.
+- **Size ▾** offers aspect × megapixel presets in multiples of 16.
+- **Undo / redo** (↶ ↷, Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y) for box and LoRA edits.
+- Copy, Paste and Templates keep names, hidden flags and LoRAs in a `moonpack`
+  block inside the JSON. Other tools ignore it, and the node's `prompt` output
+  never contains it.
 
 **Masks**
 
+- Box 1 is the front-most box, as in the editor's layer list. Where LoRA boxes
+  overlap, the front box owns the overlap.
+- Only boxes that carry a LoRA take part. A box without LoRAs does not block a
+  LoRA box behind it, and `outside` scene LoRAs still act inside it.
 - `feather` softens box edges (fraction of the box's shorter side, max 0.3);
   `skirt` grows every LoRA box by a fraction of the image's shorter side. A
   tiny box always keeps at least one full-strength token.
-- Overlaps follow drawing order: a later box sits on top of an earlier one, so
-  draw the background first and the foreground last, as the layout docs advise.
-  Only boxes that carry a LoRA take part.
 - `text_tokens = masked` (default) keeps box LoRAs off the text tokens, which
-  gives the least bleed. Set it to `global` if a LoRA needs its trigger words to
-  be processed by its own weights.
-- `mask_preview` shows one mask per LoRA box, then the background mask if one is
-  used, at `preview_width` × `preview_height`.
+  gives the least bleed. `global` lets them act on the text tokens too.
+- `mask_preview` outputs one mask per LoRA box (box order), then the
+  background mask if an `outside` scene LoRA is used.
 
 **Limits**
 
 - Only additive adapters (LoRA, LoHa, LoKr) can be masked. Bias/diff patches and
-  OFT in a regional assignment are skipped with a warning; global assignments
-  apply them as normal weight patches. DoRA magnitude is ignored.
+  OFT in a box LoRA are skipped with a warning; scene `all` LoRAs apply them as
+  normal weight patches. DoRA magnitude is ignored.
 - The embedder and the modulation layers have no per-token place to mask, so box
-  LoRAs skip them. A `*` LoRA applies there too.
+  LoRAs skip them. A scene `all` LoRA applies there too.
 - Attention still mixes tokens, so a little style can seep into neighbouring
   regions. Layout prompts are experimental in MOSS: a subject drawn outside its
   box loses its LoRA. Keep boxes generous, or use `skirt`.
 - On int8/fp8 checkpoints, layers carrying a LoRA leave the fused quantized
   kernel path, so sampling gets slower.
-- Use one MOSS Regional LoRA node per model. Feed extra LoRAs through
-  MOSS Box LoRA nodes, not a second regional node.
+- One MOSS Regional Layout per model; a second one on the same model is refused.
+- A LoRA file that is missing stops the run with the closest file names.
 
 ### Text Builder — prompt fragments as a stack
 
@@ -247,8 +252,16 @@ pytest tests/
 # Frontend widgets (MoonLoRA Loader) — needs Node, no dependencies
 # Text Builder's frontend has no headless checks; verify it in ComfyUI.
 node tests/js/run.mjs
+
+# MOSS Regional Layout: editor mask math vs. the Python node
+node tests/js/moss_layout_math.mjs
 ```
 
 ## License
 
-MIT — see `LICENSE`.
+GPL-3.0 — see `LICENSE`.
+
+Releases up to and including 0.3.0 were published under the MIT License and
+remain available under it. From 0.4.0 on, the pack is licensed under the GNU
+General Public License v3, so that it can include code derived from
+[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) (GPL-3.0).

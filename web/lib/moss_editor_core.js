@@ -455,35 +455,25 @@ app.registerExtension({
         isLinked: (n) => { const w = findW(n); return !!w && isLinked(w); },
         hasBg: () => !!node._bgImg, undo: () => undo(), redo: () => redo(),
       });
-      const FRONT_FIRST = spec.frontFirst !== false;         // index 0 = front (Ideogram) or back (Ming layers)
+      const FRONT_FIRST = spec.frontFirst !== false;         // index 0 = front-most box
       const NOUN = spec.noun || "region";
       const PLURAL = spec.nounPlural || NOUN + "s";
-      // Reference Autogrow group: per-box images (spec.refs, Ming) or one canvas per reference (spec.views).
-      const REF_GROUP = spec.refs || spec.views;
-      const REF_RE = REF_GROUP ? new RegExp(`^(?:${REF_GROUP}\\.)?ref_(\\d+)$`) : null;
-      const refIndex = (name) => { const m = REF_RE && typeof name === "string" && name.match(REF_RE); return m ? parseInt(m[1], 10) : null; };
-      // Connected reference inputs as sorted indices, e.g. [1, 3].
-      const refSlots = () => (node.inputs || []).filter((inp) => inp.link != null && refIndex(inp.name) != null)
-        .map((inp) => refIndex(inp.name)).sort((a, b) => a - b);
-      ed.refSlots = refSlots;
       const elementsWidget = findW("elements_data");
       const stylePaletteWidget = findW("style_palette_data");
       const bgBrightnessWidget = findW("bg_brightness");
       const formatWidget = findW("output_format");           // "pretty" | "compact" (set via the toolbar)
-      const coordWidget = findW("coord_mode");               // "normalized" | "absolute" (set via the toolbar)
-      const orderWidget = findW("bbox_order");               // "yx" (Ideogram) | "xy" (Qwen/standard) (set via the toolbar)
       if (bgBrightnessWidget && typeof bgBrightnessWidget.value !== "number") bgBrightnessWidget.value = 25;
       const wWidget = findW("width"), hWidget = findW("height");
       const isLinked = (w) => !!node.inputs?.some((inp) => inp.name === w.name && inp.link != null);   // widget driven by a noodle
       // Hide the data widgets while keeping them serializable.
       function hideDataWidgets() {
-        for (const w of [elementsWidget, stylePaletteWidget, bgBrightnessWidget, formatWidget, coordWidget, orderWidget,
+        for (const w of [elementsWidget, stylePaletteWidget, bgBrightnessWidget, formatWidget,
           ...(spec.dataWidgets || []).map(findW)]) {
           if (!w) continue;
           w.hidden = true;
           w.computeSize = () => [0, -4];
         }
-        for (const name of ["elements_data", "style_palette_data", "bg_brightness", "output_format", "coord_mode", "bbox_order",
+        for (const name of ["elements_data", "style_palette_data", "bg_brightness", "output_format",
           ...(spec.dataWidgets || [])]) {
           const i = node.inputs?.findIndex((inp) => inp.name === name);
           if (i != null && i !== -1) node.removeInput(i);
@@ -509,9 +499,6 @@ app.registerExtension({
       node._selected = false;  // node selected in the graph
       node._bgImg = null;      // optional reference image shown as the canvas background
       node._bgManual = false;  // bg set via "use last result" (not the image input)
-      node._refImgs = new Map(); // reference index -> Image/canvas drawn in the boxes that use it (spec.refs) or as a view's canvas
-      node._view = 0;          // spec.views: canvas shown — 0 = output, k = reference ref_k
-      node._viewPrev = null;   // box selected before a canvas switch; the next drawn box may join its row (spec.initBox)
       node._lastImported = ""; // last import_json applied to the editor (avoid re-apply)
       node._areaObservers = [];             // (reserved) live ResizeObservers to disconnect on rebuild
 
@@ -540,7 +527,7 @@ app.registerExtension({
       // Output-settings dropdown (formatting + bbox coordinate space/order) — writes the hidden widgets.
       const outBtn = document.createElement("button");
       outBtn.className = "moonmoss-btn"; outBtn.textContent = "Output ▾";
-      outBtn.title = "Output JSON settings: compact/pretty" + (coordWidget ? ", bbox coordinate space and axis order" : "");
+      outBtn.title = "Output JSON settings: compact/pretty";
       stopProp(outBtn);
       const outToggle = (get, set, label, title) => {                 // checkbox row bound to a hidden widget
         const l = document.createElement("label");
@@ -555,18 +542,10 @@ app.registerExtension({
         () => (formatWidget?.value || spec.format) !== "pretty",
         (on) => { if (formatWidget) formatWidget.value = on ? "compact" : "pretty"; },
         "compact JSON", spec.compactTip);
-      const absLbl = coordWidget && outToggle(                        // only for models with these widgets (Ideogram)
-        () => (coordWidget?.value) === "absolute",
-        (on) => { if (coordWidget) coordWidget.value = on ? "absolute" : "normalized"; },
-        "absolute pixels", "bbox in absolute pixels (scaled by width/height) instead of the 0-1000 grid. NON-STANDARD for Ideogram 4.");
-      const xyLbl = orderWidget && outToggle(
-        () => (orderWidget?.value) === "xy",
-        (on) => { if (orderWidget) orderWidget.value = on ? "xy" : "yx"; },
-        "xy order (Qwen)", "bbox axis order [xmin,ymin,xmax,ymax] (x1,y1,x2,y2, as Qwen-VL uses) instead of Ideogram's [ymin,xmin,ymax,xmax].");
       const outMenu = document.createElement("div");
       outMenu.className = "moonmoss-menu moonmoss-bgmenu";
       outMenu.style.display = "none";
-      for (const l of [compactLbl, absLbl, xyLbl]) { if (!l) continue; const r = document.createElement("div"); r.className = "moonmoss-bgrow"; r.appendChild(l); outMenu.appendChild(r); }
+      for (const l of [compactLbl]) { const r = document.createElement("div"); r.className = "moonmoss-bgrow"; r.appendChild(l); outMenu.appendChild(r); }
       document.body.appendChild(outMenu);
       node._outMenu = outMenu;
       const outDismiss = outsideDismiss(outMenu, () => closeOutMenu(), outBtn);
@@ -792,16 +771,9 @@ app.registerExtension({
         tplMenu.style.top = Math.min(r.bottom + 4, window.innerHeight - tplMenu.offsetHeight - 4) + "px";
         tplDismiss.arm();
       });
-      // spec.views: which canvas is shown and edited — the output, or one of the connected references.
-      const viewSel = document.createElement("select");
-      viewSel.className = "moonmoss-btn"; viewSel.style.cssText = "flex:0 0 auto;";
-      viewSel.title = `Canvas: the output, or a reference to mark where a ${NOUN}'s object is in it`;
-      stopProp(viewSel);
-      viewSel.addEventListener("change", () => switchView(parseInt(viewSel.value, 10)));
       bar.appendChild(hint);
-      if (spec.views) bar.appendChild(viewSel);
       bar.appendChild(tokenSpan);
-      if (!spec.textCaption) bar.appendChild(outBtn);
+      bar.appendChild(outBtn);
       // MoonPack: undo/redo buttons
       const undoBtn = document.createElement("button"), redoBtn = document.createElement("button");
       undoBtn.className = redoBtn.className = "moonmoss-btn";
@@ -878,7 +850,7 @@ app.registerExtension({
         if (wrap.offsetParent === null) return;   // hidden (collapsed tab / minimized) — measurements are 0
         const availW = cvBox.clientWidth, availH = cvBox.clientHeight;
         if (availW < 4 || availH < 4) return;
-        const [dw, dh] = dims();                               // the shown canvas: output or a reference (spec.views)
+        const [dw, dh] = dims();
         const aspect = (dw || 1) / (dh || 1);
         let cw = availW, ch = cw / aspect;
         if (ch > availH) { ch = availH; cw = ch * aspect; }
@@ -1155,35 +1127,6 @@ app.registerExtension({
         return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
       }
       function clamp01(v) { return Math.max(0, Math.min(1, v)); }
-      // spec.views: only the shown canvas's boxes are drawn, hit-tested and selectable.
-      function onView(b) { return !spec.views || (b.view || 0) === node._view; }
-      // Show canvas k; select the shown box's twin there (same spec.linkKey), else remember it for spec.initBox.
-      function switchView(k) {
-        if (!spec.views || k === node._view) return;
-        closeInlineEditor();
-        const prev = node._boxes[node._activeIdx] || null;
-        node._view = k;
-        const key = spec.linkKey;
-        const twin = prev && key ? node._boxes.findIndex((o) => o !== prev && onView(o) && o[key] === prev[key]) : -1;
-        node._viewPrev = twin < 0 ? prev : null;
-        selectOnly(twin);
-        viewSel.value = String(k);
-        renderPanel(); fitCanvas(); drawCanvas();
-      }
-      // Canvas choices = output + each connected reference; falls back to the output if the shown one went away.
-      function rebuildViews() {
-        if (!spec.views) return;
-        const slots = refSlots();
-        if (node._view && !slots.includes(node._view)) switchView(0);
-        viewSel.innerHTML = "";
-        for (const k of [0, ...slots]) {
-          const o = document.createElement("option");
-          o.value = String(k); o.textContent = k ? `ref_${k}` : "output";
-          viewSel.appendChild(o);
-        }
-        viewSel.value = String(node._view);
-        viewSel.style.display = slots.length ? "" : "none";
-      }
       // greedy word-wrap to maxW px (ctx.font must be set by caller)
       function wrapLines(text, maxW) {
         const lines = [];
@@ -1209,9 +1152,9 @@ app.registerExtension({
         return { ...b, x, y, w: Math.max(0, w), h: Math.max(0, h) };
       }
 
-      // Box indices front-most first: index order when index 0 = front, reversed for back-first models (Ming).
+      // Box indices front-most first: index order when index 0 = front, reversed otherwise.
       function stackOrder() {
-        const idx = node._boxes.map((_, i) => i).filter((i) => onView(node._boxes[i]));
+        const idx = node._boxes.map((_, i) => i);
         return FRONT_FIRST ? idx : idx.reverse();
       }
       // A box filling the canvas can't move, so dragging inside it draws a new box instead (a click still
@@ -1449,23 +1392,6 @@ app.registerExtension({
         for (const fy of h) { const py = Math.round(fy * H) + 0.5; ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke(); }
         ctx.restore();
       }
-      // A box's reference image, placed like the node's reference output: contain = fit inside, cover = fill + crop.
-      function drawRef(b, x1, y1, w, h) {
-        const src = node._refImgs.get(b.ref);
-        const iw = src ? (src.naturalWidth || src.width) : 0, ih = src ? (src.naturalHeight || src.height) : 0;
-        const bx = Math.min(x1, x1 + w), by = Math.min(y1, y1 + h), bw = Math.abs(w), bh = Math.abs(h);
-        ctx.save();
-        ctx.beginPath(); ctx.rect(bx, by, bw, bh); ctx.clip();
-        if (iw && ih) {
-          const s = b.fit === "cover" ? Math.max(bw / iw, bh / ih) : Math.min(bw / iw, bh / ih);
-          ctx.drawImage(src, bx + (bw - iw * s) / 2, by + (bh - ih * s) / 2, iw * s, ih * s);
-        } else {                                             // no preview (yet): mark the assignment instead
-          ctx.fillStyle = "rgba(128,128,128,0.3)"; ctx.fillRect(bx, by, bw, bh);
-          ctx.font = "11px sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = "#ddd";
-          ctx.fillText("ref " + b.ref, bx + bw / 2, by + bh - 6);
-        }
-        ctx.restore();
-      }
       let _rafPending = false;
       function drawCanvas() {
         if (_rafPending) return;
@@ -1484,7 +1410,7 @@ app.registerExtension({
         ctx.clearRect(0, 0, W, H);
         let bri = bgBrightnessWidget ? bgBrightnessWidget.value : 25;
         if (typeof bri !== "number" || isNaN(bri)) bri = 25;       // guard against unset widget value
-        const bgImg = spec.views && node._view ? node._refImgs.get(node._view) : node._bgImg;   // a reference canvas shows its image
+        const bgImg = node._bgImg;
         if (bgImg) {                                               // reference image, dimmed by brightness
           ctx.drawImage(bgImg, 0, 0, W, H);
           const dim = 1 - bri / 100;
@@ -1506,7 +1432,7 @@ app.registerExtension({
         const nonSel = paint.filter((i) => !selSet.has(i));
         const selOthers = paint.filter((i) => selSet.has(i) && i !== aIdx);
         const order = [...nonSel, ...selOthers];
-        if (aIdx >= 0 && aIdx < node._boxes.length && onView(node._boxes[aIdx])) order.push(aIdx);
+        if (aIdx >= 0 && aIdx < node._boxes.length) order.push(aIdx);
         const tagR = tagRects();                              // collision-avoided tag positions
         const textB = textBlocks();                           // collision-avoided in-box text positions
         for (const i of order) {
@@ -1522,7 +1448,6 @@ app.registerExtension({
             ctx.fillStyle = "rgba(26,26,26,0.88)";
             ctx.fillRect(x1, y1, w, h);
           }
-          if (b.ref && !b.nobbox && spec.refs) drawRef(b, x1, y1, w, h);   // under the tint, outline and text
           const baseA = (node.properties.boxOpacity == null ? 14 : node.properties.boxOpacity) / 100;
           const fillA = Math.min(1, hovered ? baseA + 0.1 : baseA);   // box-color tint at the chosen opacity
           ctx.fillStyle = col + Math.round(fillA * 255).toString(16).padStart(2, "0");
@@ -1581,7 +1506,7 @@ app.registerExtension({
           ctx.restore();
         }
         const apIdx = node._altPreview ?? -1;                 // Alt-held: ring the box an alt-click would select next
-        if (apIdx >= 0 && apIdx < node._boxes.length && onView(node._boxes[apIdx])) {
+        if (apIdx >= 0 && apIdx < node._boxes.length) {
           const { x1, y1, x2, y2 } = toPx(node._boxes[apIdx]);
           ctx.strokeStyle = "#46b4e6"; ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
           ctx.strokeRect(x1 + 1, y1 + 1, (x2 - x1) - 2, (y2 - y1) - 2);
@@ -1601,7 +1526,7 @@ app.registerExtension({
       // ── serialization ──
       // Wired AND the source node isn't muted(2)/bypassed(4) — those keep the link but emit nothing.
       const importConnected = () => {
-        const link = node.graph?.links?.[node.inputs?.find((i) => i.name === (spec.importInput || "import_json"))?.link];
+        const link = node.graph?.links?.[node.inputs?.find((i) => i.name === "import_json")?.link];
         return !!link && ![2, 4].includes(node.graph.getNodeById(link.origin_id)?.mode);
       };
       function serialize() {                              // saved/restored value: clean boxes
@@ -1666,15 +1591,7 @@ app.registerExtension({
         node._undo.push({ s: node._histCur, a: node._activeIdx });
         restoreSnapshot(node._redo.pop());
       }
-      // Set a box field; with spec.linkKey the box's twins on other canvases follow (renaming the key renames them).
-      function setBoxField(b, key, val) {
-        const link = spec.linkKey, old = b[key];
-        b[key] = val;
-        if (!link) return;
-        for (const o of node._boxes) {
-          if (o !== b && (key === link ? o[link] === old : o[link] === b[link])) o[key] = val;
-        }
-      }
+      function setBoxField(b, key, val) { b[key] = val; }
 
       function removeBox(i) {
         node._boxes.splice(i, 1);
@@ -1746,9 +1663,6 @@ app.registerExtension({
         } else {
           node._dragMode = "draw";
           const nb = { x: mN.x, y: mN.y, w: 0, h: 0, ...spec.blankBox() };
-          if (spec.views) nb.view = node._view;
-          spec.initBox?.(nb, ed, node._viewPrev);           // e.g. join the row selected before a canvas switch
-          node._viewPrev = null;
           node._boxes.push(nb);
           node._activeIdx = node._boxes.length - 1;
           node._selection = new Set([node._activeIdx]);
@@ -1879,8 +1793,6 @@ app.registerExtension({
         for (const b of clones) {
           b.x = clamp01(b.x + dx); b.y = clamp01(b.y + dy);
           delete b.nobbox;                              // pasted boxes are placed
-          if (spec.views) b.view = node._view;          // onto the shown canvas
-          spec.initBox?.(b, ed, null);                  // a copy is a new element (fresh id)
           node._boxes.push(b);
         }
         node._selection = new Set();
@@ -2016,7 +1928,7 @@ app.registerExtension({
         if (node._marqueeActive) {
           const r = marqueeRect();
           const sel = new Set(node._marqueeBase);
-          node._boxes.forEach((b, i) => { if (!b.locked && onView(b) && rectsOverlap(r, b)) sel.add(i); });   // marquee skips locked
+          node._boxes.forEach((b, i) => { if (!b.locked && rectsOverlap(r, b)) sel.add(i); });   // marquee skips locked
           node._selection = sel;
           if (node._activeIdx < 0 || !sel.has(node._activeIdx)) node._activeIdx = sel.size ? [...sel][0] : node._activeIdx;
         }
@@ -2056,7 +1968,6 @@ app.registerExtension({
         if (!src) return;
         const nb = JSON.parse(JSON.stringify(src));
         delete nb.nobbox; delete nb.locked;               // a duplicate is editable, not born locked
-        spec.initBox?.(nb, ed, null);                     // and a new element (fresh id)
         node._boxes.push(nb);
         selectOnly(node._boxes.length - 1);
         node._placing = true;
@@ -2260,7 +2171,6 @@ app.registerExtension({
       function getW(name) { const w = findW(name); return w ? w.value : ""; }
       function buildCaption(extras = true) {         // extras: MoonPack sidecar for Copy / templates
         const cap = spec.buildCaption(ed, { extras });
-        if (spec.textCaption) return cap;                    // already the final text
         const pretty = (formatWidget?.value || spec.format) === "pretty";
         return pretty ? pyJson(cap, 0, spec.indent) : JSON.stringify(cap);   // matches the node output
       }
@@ -2308,7 +2218,6 @@ app.registerExtension({
       }
       function tryParseCaption(t) {
         if (!t) return null;
-        if (spec.parseCaption) return spec.parseCaption(t);   // text caption formats parse themselves
         for (const cand of [t, repairJson(t)]) {
           try { const o = JSON.parse(cand); if (o && typeof o === "object" && o[spec.captionKey]) return o; }
           catch (e) {}
@@ -2341,7 +2250,7 @@ app.registerExtension({
       async function doImport() {
         let cap = null, txt = "";
         try { txt = (await navigator.clipboard.readText() || "").trim(); cap = tryParseCaption(txt); } catch (e) {}
-        const kind = spec.textCaption ? "caption" : "caption JSON";
+        const kind = "caption JSON";
         if (!cap) { txt = (window.prompt(`Paste ${spec.label} ${kind}:`, "") || "").trim(); cap = tryParseCaption(txt); }
         if (!cap) { if (txt) alert(`Not a valid ${spec.label} ${kind}` + (spec.captionKey ? ` (needs '${spec.captionKey}').` : ".")); return; }
         loadCaption(cap);
@@ -2501,10 +2410,7 @@ app.registerExtension({
         return ta;
       }
       let bboxPx = null, bboxGrid = null;   // editable coordinate fields: pixels and the exported (model) units
-      function dims() {                                        // size of the shown canvas: a reference's own size (spec.views), else width/height
-        const img = spec.views && node._view ? node._refImgs.get(node._view) : null;
-        const iw = img ? (img.naturalWidth || img.width) : 0, ih = img ? (img.naturalHeight || img.height) : 0;
-        if (iw && ih) return [iw, ih];
+      function dims() {                                        // canvas size = width/height
         return [wWidget ? wWidget.value : 1024, hWidget ? hWidget.value : 1024];
       }
       function setField(inp, b, c) {                           // skip while the field is being edited
@@ -2541,40 +2447,6 @@ app.registerExtension({
         inp.addEventListener("change", onCommit);
         return inp;
       }
-      // Reference image picker: none / each connected ref_N (a dangling assignment shows as "N?"), then contain/cover.
-      function refRow(b) {
-        const row = document.createElement("div");
-        row.className = "moonmoss-row";
-        const lbl = document.createElement("span"); lbl.textContent = "ref:"; row.appendChild(lbl);
-        const slots = refSlots(), opts = [0, ...slots];
-        if (b.ref && !slots.includes(b.ref)) opts.push(b.ref);
-        const button = (text, active, title, onClick) => {
-          const btn = document.createElement("button");
-          btn.className = "moonmoss-btn" + (active ? " active" : "");
-          btn.textContent = text; btn.title = title;
-          stopProp(btn);
-          btn.addEventListener("click", () => { onClick(); commit(); });
-          row.appendChild(btn);
-        };
-        for (const k of opts) {
-          const linked = slots.includes(k);
-          button(k ? (linked ? String(k) : k + "?") : "none", (b.ref || 0) === k,
-            !k ? "No reference image" : linked ? `Paste ${spec.refs}.ref_${k} into this ${NOUN}` : `ref_${k} is not connected`,
-            () => { if (k) b.ref = k; else { delete b.ref; delete b.fit; } });
-        }
-        if (!slots.length && !b.ref) {
-          const tip = document.createElement("span");
-          tip.style.color = "#777"; tip.textContent = `connect images to ${spec.refs}`;
-          row.appendChild(tip);
-        }
-        if (b.ref) {
-          const fl = document.createElement("span"); fl.textContent = "fit:"; fl.style.cssText = "margin-left:6px;color:#888;";
-          row.appendChild(fl);
-          button("contain", b.fit !== "cover", "Fit the whole image inside the box", () => { delete b.fit; });
-          button("cover", b.fit === "cover", "Fill the box, cropping the overflow", () => { b.fit = "cover"; });
-        }
-        return row;
-      }
       function renderPanel() {
         for (const ro of node._areaObservers) ro.disconnect();
         node._areaObservers = [];
@@ -2596,12 +2468,6 @@ app.registerExtension({
         const tag = document.createElement("b");
         tag.style.color = col; tag.textContent = NOUN + " " + (spec.tagText ? spec.tagText(b, node._activeIdx) : node._activeIdx + 1);
         hint.appendChild(tag);
-        const info = spec.describe ? spec.describe(b, ed) : "";
-        if (info) {
-          const s = document.createElement("span");
-          s.style.color = "#888"; s.textContent = " · " + info;
-          hint.appendChild(s);
-        }
         if (selN > 1) {
           const s = document.createElement("span");
           s.style.color = "#888"; s.textContent = ` (${selN} selected)`;
@@ -2634,7 +2500,6 @@ app.registerExtension({
         typeRow.appendChild(bboxGrid);
         updateBboxLabel();
         panel.appendChild(typeRow);
-        if (spec.refs) panel.appendChild(refRow(b));
 
         // per-element text fields (e.g. text + desc, or desc + hierarchy_and_relation)
         for (const f of spec.fields) {
@@ -2697,28 +2562,6 @@ app.registerExtension({
         if (s.isVideo && s.videoEl) captureVideoFrame(s.videoEl, (cv) => loadBg(cv.toDataURL("image/webp", 0.9)));
         else if (s.url) loadBg(s.url);
       });
-      // Reference images: REF_GROUP names the Autogrow input group ("references" -> references.ref_1..), drawn in
-      // the boxes that use them (spec.refs) or as their own canvas (spec.views). Previews resolve like the
-      // background (Load Image sources right away, computed images once they have one).
-      if (REF_GROUP) {
-        watchImageInputs(node, (inp) => refIndex(inp.name) != null, (sources) => {
-          const next = new Map();
-          for (const s of sources) {
-            const k = refIndex(s.name);
-            if (s.isVideo && s.videoEl) { captureVideoFrame(s.videoEl, (cv) => { next.set(k, cv); fitCanvas(); drawCanvas(); }); continue; }
-            if (!s.url) continue;
-            const prev = node._refImgs.get(k);
-            if (prev && prev._moonUrl === s.url) { next.set(k, prev); continue; }
-            const img = new Image();
-            img.crossOrigin = "anonymous"; img._moonUrl = s.url;
-            img.onload = () => { fitCanvas(); drawCanvas(); };   // a reference canvas takes the image's aspect
-            img.src = s.url;
-            next.set(k, img);
-          }
-          node._refImgs = next;
-          rebuildViews(); renderPanel(); fitCanvas(); drawCanvas();
-        });
-      }
       // "Grab BG" button: use the last generated image as the background, or clear it.
       node._grabResultBg = () => {
         if (!lastResultImage) { alert("No sampling result yet — run a generation first."); return; }
@@ -2789,7 +2632,7 @@ app.registerExtension({
         if (!o) return;
         const p = node.properties;
         o.ideo = JSON.parse(JSON.stringify({ boxes: node._boxes, palette: node._stylePalette, importMode: findW("import_mode")?.value,
-          outputFormat: findW("output_format")?.value, coordMode: findW("coord_mode")?.value, bboxOrder: findW("bbox_order")?.value,
+          outputFormat: findW("output_format")?.value,
           dock: { pinned: p.dockPinned, graph: p.dockGraph, rect: p.dockRect, panelH: node._panelH, min: p.dockMin,
             exposeParent: p.exposeToParent, parent: p.dockParent } }));
       });
@@ -2835,14 +2678,6 @@ app.registerExtension({
           formatWidget.value = (f === "pretty" || f === "compact") ? f : spec.format;
           compactLbl._cb.checked = formatWidget.value === "compact";
         }
-        if (coordWidget) {                                    // restore coord mode; default normalized unless explicitly absolute
-          coordWidget.value = (o && o.ideo && o.ideo.coordMode) === "absolute" ? "absolute" : "normalized";
-          absLbl._cb.checked = coordWidget.value === "absolute";
-        }
-        if (orderWidget) {                                    // restore bbox axis order; default yx unless explicitly xy
-          orderWidget.value = (o && o.ideo && o.ideo.bboxOrder) === "xy" ? "xy" : "yx";
-          xyLbl._cb.checked = orderWidget.value === "xy";
-        }
         spec.onConfigure?.(ed);                               // MoonPack: re-read the spec's own data widgets
         node._configured = true;                              // mark as loaded so initial layout keeps the restored size
         hideDataWidgets();
@@ -2866,7 +2701,6 @@ app.registerExtension({
         boxOpacSlider.value = node.properties.boxOpacity == null ? 14 : node.properties.boxOpacity;
         syncCanvasToDims();
         rebuildStylePalette();
-        rebuildViews();
         renderPanel();
         drawCanvas();
         updateTokens();
@@ -2887,7 +2721,6 @@ app.registerExtension({
         else if (node.size[0] < 380) node.setSize([380, node.size[1]]);                                          // current reload/paste: keep saved size, enforce min width
         syncCanvasToDims();
         rebuildStylePalette();
-        rebuildViews();
         renderPanel();
         drawCanvas();
         updateTokens();
@@ -2898,14 +2731,6 @@ app.registerExtension({
   },
 });
 
-// The editor's "out" field always shows the 0-1000 grid, whatever the coord_mode.
-export function ideoGrid(b) {
-  const c = (v) => Math.max(0, Math.min(1000, Math.round(v * 1000)));
-  let ymin = c(b.y), xmin = c(b.x), ymax = c(b.y + b.h), xmax = c(b.x + b.w);
-  if (ymin > ymax) [ymin, ymax] = [ymax, ymin];
-  if (xmin > xmax) [xmin, xmax] = [xmax, xmin];
-  return [ymin, xmin, ymax, xmax];
-}
 // [ymin, xmin, ymax, xmax] on an sy × sx grid -> box fractions, each edge clamped into the canvas.
 export function ideoFromEdges([ymin, xmin, ymax, xmax], sx, sy) {
   ymin = Math.max(0, Math.min(sy, ymin)); ymax = Math.max(0, Math.min(sy, ymax));

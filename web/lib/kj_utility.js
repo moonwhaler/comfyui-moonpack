@@ -5,16 +5,6 @@ const { app } = window.comfyAPI.app;
 
 // ─── General-purpose helpers shared across KJNodes JS ───
 
-export function makeUUID() {
-  let dt = new Date().getTime()
-  const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = ((dt + Math.random() * 16) % 16) | 0
-    dt = Math.floor(dt / 16)
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
-  })
-  return uuid
-}
-
 export function chainCallback(object, property, callback) {
   if (object == undefined) {
     console.error("Tried to add callback to non-existant object")
@@ -32,76 +22,7 @@ export function chainCallback(object, property, callback) {
   }
 }
 
-export function hideWidgetForGood(node, widget, suffix = '') {
-  widget.origType = widget.type
-  widget.origComputeSize = widget.computeSize
-  widget.origSerializeValue = widget.serializeValue
-  widget.computeSize = () => [0, -4]
-  widget.type = "converted-widget" + suffix
-  if (widget.linkedWidgets) {
-    for (const w of widget.linkedWidgets) {
-      hideWidgetForGood(node, w, ':' + widget.name)
-    }
-  }
-}
-
 // ─── Graph coordinate helpers ───
-
-export function clientToCanvas(lgCanvas, clientX, clientY) {
-  const rect = lgCanvas.canvas.getBoundingClientRect();
-  return [
-    (clientX - rect.left) / lgCanvas.ds.scale - lgCanvas.ds.offset[0],
-    (clientY - rect.top) / lgCanvas.ds.scale - lgCanvas.ds.offset[1],
-  ];
-}
-
-export function getNodeAtPoint(graph, cx, cy) {
-  for (let i = graph._nodes.length - 1; i >= 0; i--) {
-    if (graph._nodes[i].isPointInside(cx, cy)) return graph._nodes[i];
-  }
-  return null;
-}
-
-export function typesCompatible(a, b) {
-  if (a === "*" || b === "*") return true;
-  if (a === b) return true;
-  if (typeof a !== "string" || typeof b !== "string") return false;
-  if (a.toUpperCase() === b.toUpperCase()) return true;
-  // ComfyUI accepts union types like "STRING,INT" — match if any token overlaps
-  if (a.includes(",") || b.includes(",")) {
-    const aTokens = a.toUpperCase().split(",").map(s => s.trim()).filter(Boolean);
-    const bTokens = b.toUpperCase().split(",").map(s => s.trim()).filter(Boolean);
-    if (aTokens.includes("*") || bTokens.includes("*")) return true;
-    return aTokens.some(t => bTokens.includes(t));
-  }
-  return false;
-}
-
-// ─── Slot position helper ───
-// Uses modern API (DOM-registered positions in Vue mode) with legacy fallback
-export function getSlotPos(node, isInput, slotIdx) {
-  if (isInput && node.getInputPos) return node.getInputPos(slotIdx);
-  if (!isInput && node.getOutputPos) return node.getOutputPos(slotIdx);
-  const out = [0, 0];
-  node.getConnectionPos(isInput, slotIdx, out);
-  return out;
-}
-
-// Link by node id; subgraph IO nodes aren't in graph._nodes and have no connect(), so go through their slot objects
-export function connectById(graph, originId, originSlot, targetId, targetSlot, afterRerouteId) {
-  const target = graph.getNodeById(targetId);
-  if (graph.inputNode && originId === graph.inputNode.id) {
-    const input = target?.inputs?.[targetSlot];
-    return input ? graph.inputNode.slots[originSlot]?.connect(input, target, afterRerouteId) ?? null : null;
-  }
-  const origin = graph.getNodeById(originId);
-  if (!origin) return null;
-  if (graph.outputNode && targetId === graph.outputNode.id) {
-    const output = origin.outputs?.[originSlot];
-    return output ? graph.outputNode.slots[targetSlot]?.connect(output, origin, afterRerouteId) ?? null : null;
-  }
-  return target ? origin.connect(originSlot, target, targetSlot, afterRerouteId) : null;
-}
 
 // ─── Middle-click pan passthrough for DOM widgets ───
 // Allows panning the LiteGraph canvas via middle-click drag on any DOM element
@@ -248,26 +169,6 @@ export function captureVideoFrame(videoEl, callback) {
     const onReady = () => { videoEl.removeEventListener("loadeddata", onReady); capture(); };
     videoEl.addEventListener("loadeddata", onReady);
   }
-}
-
-// ─── Bounding box hit test ───
-// Tests whether (mx, my) hits a corner handle or the interior of a rect defined by (x1, y1)–(x2, y2).
-// Returns "resize-tl", "resize-tr", "resize-bl", "resize-br", "resize-t", "resize-b", "resize-l", "resize-r", "move", or null.
-export function rectHitTest(mx, my, x1, y1, x2, y2, radius) {
-  const hit = (cx, cy) => Math.abs(mx - cx) < radius && Math.abs(my - cy) < radius;
-  // Corners first (higher priority)
-  if (hit(x1, y1)) return "resize-tl";
-  if (hit(x2, y1)) return "resize-tr";
-  if (hit(x1, y2)) return "resize-bl";
-  if (hit(x2, y2)) return "resize-br";
-  // Edges
-  if (mx >= x1 && mx <= x2 && Math.abs(my - y1) < radius) return "resize-t";
-  if (mx >= x1 && mx <= x2 && Math.abs(my - y2) < radius) return "resize-b";
-  if (my >= y1 && my <= y2 && Math.abs(mx - x1) < radius) return "resize-l";
-  if (my >= y1 && my <= y2 && Math.abs(mx - x2) < radius) return "resize-r";
-  // Interior
-  if (mx >= x1 && mx <= x2 && my >= y1 && my <= y2) return "move";
-  return null;
 }
 
 // Returns the appropriate CSS cursor for a bbox hit mode string.
